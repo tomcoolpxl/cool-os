@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcc:*)",
+      "Bash(clang:*)",
+      "Bash(ld:*)",
+      "Bash(qemu-system-x86_64:*)",
+      "Bash(pacman:*)",
+      "Bash(curl:*)",
+      "Bash(make)",
+      "Bash(make:*)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
