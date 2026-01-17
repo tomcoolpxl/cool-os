@@ -1,0 +1,20 @@
+# Build output
+build/
+
+# OS/EFI/boot artifacts
+*.img
+*.fd
+*.efi
+*.elf
+*.o
+
+# Editor/IDE files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.DS_Store
+
+# Misc
+*.log
