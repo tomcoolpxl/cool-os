@@ -1,10 +1,12 @@
 #include <stdint.h>
 #include <stddef.h>
+#define LIMINE_API_REVISION 2
 #include "limine.h"
 #include "serial.h"
 #include "panic.h"
 #include "hhdm.h"
 #include "idt.h"
+#include "pmm.h"
 
 void kmain(void);
 
@@ -27,10 +29,26 @@ static volatile struct limine_hhdm_request hhdm_request = {
     .revision = 0
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_memmap_request memmap_request = {
+    .id = LIMINE_MEMMAP_REQUEST,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_executable_address_request exec_addr_request = {
+    .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST,
+    .revision = 0
+};
+
 __attribute__((used, section(".limine_requests_end")))
 static volatile LIMINE_REQUESTS_END_MARKER
 
 uint64_t hhdm_offset;
+
+/* Global Limine response pointers for PMM */
+struct limine_memmap_response *limine_memmap;
+struct limine_executable_address_response *limine_exec_addr;
 
 static void print_hex(uint64_t val) {
     const char *hex = "0123456789abcdef";
@@ -92,6 +110,47 @@ void kmain(void) {
 
     /* Initialize IDT and exception handlers */
     idt_init();
+
+    /* Validate Limine memmap and exec_addr responses */
+    if (memmap_request.response == NULL) {
+        panic("Memory map request not fulfilled by bootloader");
+    }
+    if (exec_addr_request.response == NULL) {
+        panic("Executable address request not fulfilled by bootloader");
+    }
+    limine_memmap = memmap_request.response;
+    limine_exec_addr = exec_addr_request.response;
+
+    /* Initialize physical memory manager */
+    pmm_init();
+
+    /* PMM validation test: allocate, write, verify, free 10 frames */
+    serial_puts("PMM: Running allocation test...\n");
+    uint64_t test_frames[10];
+    uint64_t free_before = pmm_get_free_frames();
+    for (int i = 0; i < 10; i++) {
+        test_frames[i] = pmm_alloc_frame();
+        serial_puts("PMM: Allocated frame ");
+        print_hex((uint64_t)i);
+        serial_puts(" at ");
+        print_hex(test_frames[i]);
+        serial_puts("\n");
+
+        /* Write and verify test pattern */
+        volatile uint64_t *v = (volatile uint64_t *)phys_to_hhdm(test_frames[i]);
+        *v = 0xCAFEBABECAFEBABEULL;
+        ASSERT(*v == 0xCAFEBABECAFEBABEULL);
+    }
+    /* Free all test frames */
+    for (int i = 0; i < 10; i++) {
+        pmm_free_frame(test_frames[i]);
+    }
+    uint64_t free_after = pmm_get_free_frames();
+    ASSERT(free_before == free_after);
+    serial_puts("PMM: All 10 frames allocated and verified successfully\n");
+    serial_puts("PMM: Free frames restored: ");
+    print_hex(free_after);
+    serial_puts("\n");
 
     /* Test triggers (activated via -DTEST_UD or -DTEST_PF) */
 #if defined(TEST_UD)
