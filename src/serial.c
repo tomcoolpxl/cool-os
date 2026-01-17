@@ -1,16 +1,7 @@
 #include "serial.h"
+#include "ports.h"
 
 #define COM1_PORT 0x3F8
-
-static inline void outb(unsigned short port, unsigned char val) {
-    asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline unsigned char inb(unsigned short port) {
-    unsigned char ret;
-    asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
 
 void serial_init(void) {
     outb(COM1_PORT + 1, 0x00);  /* Disable all interrupts */

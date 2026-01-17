@@ -35,13 +35,19 @@ struct interrupt_frame {
     uint64_t ss;
 };
 
-/* C handler called from assembly stub */
+/* C handler called from assembly stub (exceptions) */
 void isr_handler(struct interrupt_frame *frame);
+
+/* C handler called from assembly stub (IRQs) */
+void irq_handler(struct interrupt_frame *frame);
 
 /* Assembly stub table (defined in isr_stubs.S) */
 extern void *isr_stub_table[32];
 
 /* Default stub for vectors 32-255 */
 extern void isr_stub_default(void);
+
+/* IRQ stub for timer (vector 0x20) */
+extern void irq_stub_0x20(void);
 
 #endif

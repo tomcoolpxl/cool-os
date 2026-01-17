@@ -8,6 +8,9 @@
 #include "idt.h"
 #include "pmm.h"
 #include "heap.h"
+#include "pic.h"
+#include "pit.h"
+#include "timer.h"
 
 void kmain(void);
 
@@ -245,6 +248,15 @@ void kmain(void) {
     serial_puts("Testing: triggering #PF (page fault)...\n");
     *(volatile uint64_t *)0xdeadbeefdeadbeef = 1;
 #endif
+
+    /* Initialize PIC, PIT, and timer subsystem */
+    pic_init();
+    pit_init(100);
+    timer_init();
+
+    /* Enable interrupts */
+    serial_puts("cool-os: enabling interrupts\n");
+    asm volatile("sti");
 
     serial_puts("cool-os: entering idle loop\n");
     for (;;) {

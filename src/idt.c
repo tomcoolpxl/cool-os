@@ -27,6 +27,9 @@ void idt_init(void) {
         idt_set_gate(i, (uint64_t)isr_stub_default, IDT_TYPE_INTERRUPT_GATE);
     }
 
+    /* Install IRQ handler for timer (vector 0x20) */
+    idt_set_gate(0x20, (uint64_t)irq_stub_0x20, IDT_TYPE_INTERRUPT_GATE);
+
     /* Load IDT register */
     idtr.limit = sizeof(idt) - 1;
     idtr.base  = (uint64_t)&idt;

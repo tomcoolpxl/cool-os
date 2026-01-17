@@ -117,6 +117,85 @@ isr_stub_default:
     jmp isr_common_stub
 
 /*
+ * IRQ stubs for hardware interrupts (vectors 0x20+)
+ * Unlike exceptions, IRQs can return via iretq.
+ */
+
+/* Macro for IRQ stub (no error code from CPU) */
+.macro IRQ_STUB vector
+.global irq_stub_\vector
+irq_stub_\vector:
+    pushq $0                    /* dummy error code */
+    pushq $\vector              /* vector number */
+    jmp irq_common_stub
+.endm
+
+/* Generate IRQ stub for timer (vector 0x20 = 32) */
+IRQ_STUB 0x20
+
+/*
+ * Common IRQ stub: save all GPRs, call C handler, restore and iretq
+ *
+ * Stack on entry is identical to exception stub:
+ *   [rsp+0]  = vector
+ *   [rsp+8]  = error_code (dummy 0)
+ *   [rsp+16] = rip (pushed by CPU)
+ *   [rsp+24] = cs
+ *   [rsp+32] = rflags
+ *   [rsp+40] = rsp (from before interrupt)
+ *   [rsp+48] = ss
+ */
+irq_common_stub:
+    /* Clear direction flag for string operations (ABI compliance) */
+    cld
+
+    /* Save all general-purpose registers */
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+
+    /* Pass pointer to interrupt_frame as first argument */
+    movq %rsp, %rdi
+
+    /* Call C handler */
+    call irq_handler
+
+    /* Restore all general-purpose registers */
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
+
+    /* Pop vector and error_code */
+    addq $16, %rsp
+
+    /* Return from interrupt */
+    iretq
+
+/*
  * Table of ISR stub addresses for idt_init() to use
  */
 .section .data
