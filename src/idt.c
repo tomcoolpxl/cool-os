@@ -22,11 +22,16 @@ void idt_init(void) {
         idt_set_gate(i, (uint64_t)isr_stub_table[i], IDT_TYPE_INTERRUPT_GATE);
     }
 
+    /* Install default handler for vectors 32-255 */
+    for (int i = 32; i < IDT_ENTRIES; i++) {
+        idt_set_gate(i, (uint64_t)isr_stub_default, IDT_TYPE_INTERRUPT_GATE);
+    }
+
     /* Load IDT register */
     idtr.limit = sizeof(idt) - 1;
     idtr.base  = (uint64_t)&idt;
 
     asm volatile("lidt %0" : : "m"(idtr));
 
-    serial_puts("IDT: Installed\n");
+    serial_puts("IDT: Installed (256 vectors)\n");
 }

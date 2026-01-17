@@ -2,6 +2,9 @@
 #include "cpu.h"
 #include "serial.h"
 
+/* Re-entrancy guard to prevent recursive exceptions during crash report */
+static volatile int in_handler = 0;
+
 /* Exception names for vectors 0-31 */
 static const char *exception_names[32] = {
     "#DE Divide Error",
@@ -78,6 +81,16 @@ static void print_pf_error(uint64_t error_code) {
 }
 
 void isr_handler(struct interrupt_frame *frame) {
+    /* Disable interrupts (should already be disabled by interrupt gate) */
+    asm volatile("cli");
+
+    /* Re-entrancy guard: if we fault while handling a fault, halt immediately */
+    if (in_handler) {
+        serial_puts("\n!!! NESTED EXCEPTION - HALTING !!!\n");
+        cpu_halt();
+    }
+    in_handler = 1;
+
     serial_puts("\n========== EXCEPTION ==========\n");
 
     /* Exception name and vector */

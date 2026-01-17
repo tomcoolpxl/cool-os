@@ -9,7 +9,8 @@
       "Bash(curl:*)",
       "Bash(make)",
       "Bash(make:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(nm:*)"
     ]
   }
 }

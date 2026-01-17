@@ -38,7 +38,10 @@ struct interrupt_frame {
 /* C handler called from assembly stub */
 void isr_handler(struct interrupt_frame *frame);
 
-/* Assembly stub table (defined in isr.S) */
+/* Assembly stub table (defined in isr_stubs.S) */
 extern void *isr_stub_table[32];
+
+/* Default stub for vectors 32-255 */
+extern void isr_stub_default(void);
 
 #endif

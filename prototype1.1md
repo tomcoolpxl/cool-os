@@ -1,0 +1,81 @@
+Good milestone. Before moving on, there are a few correctness traps around IDT/ISR work that are worth validating now because they become painful later.
+
+## Prototype 1 correctness checklist
+
+### 1) Stub correctness for error-code vs no-error-code vectors
+
+For vectors 0-31, CPU pushes an error code only for: 8, 10, 11, 12, 13, 14, 17, 21 (the set varies slightly by reference; the common ones you must handle are #DF, #TS, #NP, #SS, #GP, #PF, #AC, #CP if you include it).
+
+Validation:
+
+* Ensure your stubs for vectors with an error code do NOT push a dummy error code.
+* Ensure your stubs for vectors without an error code DO push a dummy 0, so the C handler sees a consistent frame layout.
+* Ensure vector number is passed consistently (pushed or in a register) and matches what C reads.
+
+Failure mode if wrong:
+
+* Your crash report prints nonsense RIP/RSP/error code, and later "works until it doesn't".
+
+### 2) iretq frame layout assumptions
+
+On x86-64, the CPU pushes (at least): RIP, CS, RFLAGS, and if privilege level changes, also RSP, SS. In ring 0 exceptions, SS/RSP are typically not pushed.
+
+Validation:
+
+* Your `interrupt_frame` struct must match the actual stack layout your code uses, not what you hope is there.
+* If you always print SS/RSP, make sure you are not reading garbage when they are not present.
+
+Pragmatic approach:
+
+* In ring 0 only, print RIP/CS/RFLAGS unconditionally.
+* Print RSP/SS only if you detect CPL change (or implement always-on ring3 later, and revise).
+
+### 3) ABI and clobbers in assembly -> C transition
+
+If your stubs call a C function:
+
+* Save all GPRs you intend to print.
+* Preserve alignment (16-byte aligned stack at the C call boundary).
+* Clear DF flag if you ever plan to use string instructions (good hygiene: `cld` in early init or stubs).
+
+Validation:
+
+* Add an ASSERT in the handler checking stack alignment at the moment C runs (but be careful about expected alignment in this context).
+* Build with optimization enabled once (e.g., -O2) and rerun tests; some alignment bugs only show up under optimization.
+
+### 4) Red zone handling
+
+On x86-64 SysV ABI, the red zone exists in userland, but kernels should compile with red zone disabled.
+
+Validation:
+
+* Ensure kernel CFLAGS include `-mno-red-zone`.
+  Failure mode:
+* Interrupt/exception handlers can overwrite red-zone memory under the stack and corrupt state.
+
+### 5) Interrupt gate type, not trap gate (for now)
+
+* Using an interrupt gate (0x8E) clears IF on entry, which is safer while you are not managing nested interrupts.
+* Trap gates keep IF as-is and can cause re-entrancy surprises.
+
+Validation:
+
+* Confirm attributes are 0x8E for all exception vectors.
+
+### 6) Double fault resilience (optional but recommended soon)
+
+Right now you are probably handling #DF on the current stack.
+
+That is acceptable for Proto 1, but before you start paging/memory allocator work, add IST for #DF (and ideally #PF) to avoid triple faults when the current stack is bad.
+
+## Small improvements you can do now (low cost)
+
+1. Add a default handler for vectors 32-255
+   Even if you do not enable interrupts yet, it is safer to have every vector point somewhere valid.
+
+2. Make the handler re-entrancy safe
+   If an exception happens while printing:
+
+* Disable interrupts (cli) at the start of handler
+* Use a simple "in_handler" guard to avoid recursion and immediately halt if nested
+

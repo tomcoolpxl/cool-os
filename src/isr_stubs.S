@@ -71,6 +71,9 @@ ISR_NOERR 31    /* Reserved */
  *   [rsp+48] = ss
  */
 isr_common_stub:
+    /* Clear direction flag for string operations (ABI compliance) */
+    cld
+
     /* Save all general-purpose registers */
     pushq %rax
     pushq %rbx
@@ -101,6 +104,17 @@ isr_common_stub:
     cli
 1:  hlt
     jmp 1b
+
+/*
+ * Default stub for vectors 32-255 (IRQs and software interrupts)
+ * These should not fire in Proto 1, but having a handler prevents
+ * jumping to null if something unexpected happens.
+ */
+.global isr_stub_default
+isr_stub_default:
+    pushq $0                    /* dummy error code */
+    pushq $0xff                 /* vector 255 as "unknown" marker */
+    jmp isr_common_stub
 
 /*
  * Table of ISR stub addresses for idt_init() to use
