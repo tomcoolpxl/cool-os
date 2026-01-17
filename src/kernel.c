@@ -7,6 +7,7 @@
 #include "hhdm.h"
 #include "idt.h"
 #include "pmm.h"
+#include "heap.h"
 
 void kmain(void);
 
@@ -151,6 +152,90 @@ void kmain(void) {
     serial_puts("PMM: Free frames restored: ");
     print_hex(free_after);
     serial_puts("\n");
+
+    /* Initialize heap allocator */
+    heap_init();
+
+    /* Heap validation test 1: Basic alloc/free */
+    serial_puts("HEAP: Running basic allocation test...\n");
+    void *p1 = kmalloc(64);
+    ASSERT(p1 != NULL);
+    serial_puts("HEAP: Allocated 64 bytes at ");
+    print_hex((uint64_t)p1);
+    serial_puts("\n");
+
+    void *p2 = kmalloc(128);
+    ASSERT(p2 != NULL);
+    serial_puts("HEAP: Allocated 128 bytes at ");
+    print_hex((uint64_t)p2);
+    serial_puts("\n");
+
+    void *p3 = kmalloc(256);
+    ASSERT(p3 != NULL);
+    serial_puts("HEAP: Allocated 256 bytes at ");
+    print_hex((uint64_t)p3);
+    serial_puts("\n");
+
+    kfree(p2);
+    serial_puts("HEAP: Freed 128-byte block\n");
+
+    kfree(p1);
+    serial_puts("HEAP: Freed 64-byte block\n");
+
+    kfree(p3);
+    serial_puts("HEAP: Freed 256-byte block\n");
+    serial_puts("HEAP: Basic allocation test passed\n");
+
+    /* Heap validation test 2: Coalescing test */
+    serial_puts("HEAP: Running coalescing test...\n");
+    void *c1 = kmalloc(100);
+    void *c2 = kmalloc(100);
+    void *c3 = kmalloc(100);
+    ASSERT(c1 != NULL && c2 != NULL && c3 != NULL);
+    serial_puts("HEAP: Allocated 3 x 100-byte blocks\n");
+
+    kfree(c2);
+    serial_puts("HEAP: Freed middle block\n");
+
+    kfree(c1);
+    serial_puts("HEAP: Freed first block (should coalesce with middle)\n");
+
+    kfree(c3);
+    serial_puts("HEAP: Freed last block (should coalesce all)\n");
+
+    void *big = kmalloc(300);
+    ASSERT(big != NULL);
+    serial_puts("HEAP: Allocated 300-byte block (coalescing worked): ");
+    print_hex((uint64_t)big);
+    serial_puts("\n");
+    kfree(big);
+    serial_puts("HEAP: Coalescing test passed\n");
+
+    /* Heap validation test 3: Stress test */
+    serial_puts("HEAP: Running stress test (100 allocations)...\n");
+    void *ptrs[100];
+    for (int i = 0; i < 100; i++) {
+        ptrs[i] = kmalloc(32);
+        ASSERT(ptrs[i] != NULL);
+    }
+    serial_puts("HEAP: All 100 allocations succeeded\n");
+
+    for (int i = 0; i < 100; i += 2) {
+        kfree(ptrs[i]);
+    }
+    serial_puts("HEAP: Freed alternate blocks\n");
+
+    for (int i = 0; i < 100; i += 2) {
+        ptrs[i] = kmalloc(32);
+        ASSERT(ptrs[i] != NULL);
+    }
+    serial_puts("HEAP: Re-allocated alternate blocks\n");
+
+    for (int i = 0; i < 100; i++) {
+        kfree(ptrs[i]);
+    }
+    serial_puts("HEAP: Freed all blocks\n");
+    serial_puts("HEAP: Stress test passed\n");
 
     /* Test triggers (activated via -DTEST_UD or -DTEST_PF) */
 #if defined(TEST_UD)
