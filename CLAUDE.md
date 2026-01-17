@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 4 complete (timer interrupts). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 5 complete (time services). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -46,7 +46,7 @@ make test-pf  # Test page fault exception
 - KVM acceleration enabled
 - Serial redirected to host terminal (`-serial stdio`)
 
-## Implemented Features (Proto 1-4)
+## Implemented Features (Proto 1-5)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -73,7 +73,13 @@ make test-pf  # Test page fault exception
 - 8253/8254 PIT driver at 100 Hz
 - IRQ stubs with `iretq` return path (separate from exception stubs that halt)
 - `pit_get_ticks()` API for tick counting
-- Timer prints "tick=N" every 100 ticks (1 second)
+
+### Proto 5: Time Services (Sleep and Delay)
+- `timer_get_ticks()` API for reading tick count
+- `timer_sleep_ticks(n)` blocking delay using `hlt` loop
+- `timer_sleep_ms(n)` millisecond-level delay with rounding
+- `TIMER_HZ` constant (100 Hz)
+- Lightweight IRQ handler (no serial output)
 
 ## Source Structure
 
@@ -90,7 +96,7 @@ include/
   pmm.h       - Physical memory manager API
   ports.h     - I/O port access (inb/outb/io_wait)
   serial.h    - Serial port I/O
-  timer.h     - Timer subsystem API
+  timer.h     - Timer subsystem API (sleep/delay functions)
 
 src/
   heap.c      - Arena-based heap implementation
@@ -102,7 +108,7 @@ src/
   pit.c       - 8253/8254 PIT driver implementation
   pmm.c       - Bitmap PMM implementation
   serial.c    - Serial port driver
-  timer.c     - Timer IRQ handler
+  timer.c     - Timer services and IRQ handler
 ```
 
 ## Design Philosophy

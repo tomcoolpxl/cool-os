@@ -1,7 +1,6 @@
 #include "timer.h"
 #include "pit.h"
 #include "pic.h"
-#include "serial.h"
 #include "isr.h"
 
 #define IRQ_TIMER  0x20
@@ -11,6 +10,23 @@ void timer_init(void) {
     /* This function exists for future expansion (e.g., callback registration) */
 }
 
+uint64_t timer_get_ticks(void) {
+    return pit_get_ticks();
+}
+
+void timer_sleep_ticks(uint64_t ticks) {
+    uint64_t target = timer_get_ticks() + ticks;
+    while (timer_get_ticks() < target) {
+        asm volatile("hlt");
+    }
+}
+
+void timer_sleep_ms(uint64_t ms) {
+    /* Round up to ensure minimum delay is met */
+    uint64_t ticks = (ms * TIMER_HZ + 999) / 1000;
+    timer_sleep_ticks(ticks);
+}
+
 /*
  * IRQ handler called from assembly stub.
  * Currently hardwired to handle timer (vector 0x20) only.
@@ -18,25 +34,6 @@ void timer_init(void) {
 void irq_handler(struct interrupt_frame *frame) {
     if (frame->vector == IRQ_TIMER) {
         pit_tick();
-
-        /* Print tick count every 100 ticks (once per second at 100 Hz) */
-        uint64_t ticks = pit_get_ticks();
-        if (ticks % 100 == 0) {
-            serial_puts("tick=");
-            /* Simple decimal print for tick count */
-            char buf[21];  /* max uint64_t is 20 digits + null */
-            int i = 20;
-            buf[i] = '\0';
-            uint64_t val = ticks;
-            do {
-                buf[--i] = '0' + (val % 10);
-                val /= 10;
-            } while (val > 0);
-            serial_puts(&buf[i]);
-            serial_puts("\n");
-        }
-
-        /* Send end-of-interrupt to PIC */
         pic_send_eoi(0);  /* IRQ0 = timer */
     }
 }

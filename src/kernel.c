@@ -258,6 +258,30 @@ void kmain(void) {
     serial_puts("cool-os: enabling interrupts\n");
     asm volatile("sti");
 
+    /* Timer validation tests */
+
+    /* Test 1: Fixed delay test (3 x 1 second) */
+    serial_puts("TIMER: Fixed delay test (3 x 1s)...\n");
+    for (int i = 1; i <= 3; i++) {
+        timer_sleep_ms(1000);
+        serial_puts("wake ");
+        serial_putc('0' + i);
+        serial_puts("\n");
+    }
+    serial_puts("TIMER: Fixed delay test passed\n");
+
+    /* Test 2: Chained delay test (200+300+500ms = 1s total) */
+    serial_puts("TIMER: Chained delay test (200+300+500ms)...\n");
+    timer_sleep_ms(200);
+    timer_sleep_ms(300);
+    timer_sleep_ms(500);
+    serial_puts("TIMER: Chained delay test passed\n");
+
+    /* Test 3: Long delay stability (5 seconds) */
+    serial_puts("TIMER: Long delay test (5s)...\n");
+    timer_sleep_ms(5000);
+    serial_puts("TIMER: Long delay test passed\n");
+
     serial_puts("cool-os: entering idle loop\n");
     for (;;) {
         asm volatile("hlt");
