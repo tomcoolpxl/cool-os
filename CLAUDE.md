@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 5 complete (time services). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 6 complete (cooperative multitasking). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -46,7 +46,7 @@ make test-pf  # Test page fault exception
 - KVM acceleration enabled
 - Serial redirected to host terminal (`-serial stdio`)
 
-## Implemented Features (Proto 1-5)
+## Implemented Features (Proto 1-6)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -81,6 +81,15 @@ make test-pf  # Test page fault exception
 - `TIMER_HZ` constant (100 Hz)
 - Lightweight IRQ handler (no serial output)
 
+### Proto 6: Cooperative Multitasking
+- Task structure with 4 KiB stacks (1 PMM frame per task)
+- `task_create(entry)` / `task_yield()` / `task_current()` API
+- Round-robin scheduler with circular linked list
+- Assembly context switch saving callee-saved registers (RBP, RBX, R12-R15)
+- Bootstrap task representing kmain's context
+- Idle task running `hlt` loop when no tasks are ready
+- Task states: RUNNING, READY, FINISHED
+
 ## Source Structure
 
 ```
@@ -95,10 +104,13 @@ include/
   pit.h       - 8253/8254 PIT driver API
   pmm.h       - Physical memory manager API
   ports.h     - I/O port access (inb/outb/io_wait)
+  scheduler.h - Scheduler API (init/add/yield)
   serial.h    - Serial port I/O
+  task.h      - Task API (create/yield/current)
   timer.h     - Timer subsystem API (sleep/delay functions)
 
 src/
+  context_switch.S - Assembly context switch routine
   heap.c      - Arena-based heap implementation
   idt.c       - IDT setup
   isr.c       - Exception handlers
@@ -107,7 +119,9 @@ src/
   pic.c       - 8259A PIC driver implementation
   pit.c       - 8253/8254 PIT driver implementation
   pmm.c       - Bitmap PMM implementation
+  scheduler.c - Round-robin scheduler implementation
   serial.c    - Serial port driver
+  task.c      - Task creation and management
   timer.c     - Timer services and IRQ handler
 ```
 

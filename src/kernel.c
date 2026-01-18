@@ -11,6 +11,8 @@
 #include "pic.h"
 #include "pit.h"
 #include "timer.h"
+#include "task.h"
+#include "scheduler.h"
 
 void kmain(void);
 
@@ -75,6 +77,27 @@ void panic(const char *msg) {
 
 void hhdm_init(uint64_t offset) {
     hhdm_offset = offset;
+}
+
+/* Proto 6 test tasks */
+static void test_task_a(void) {
+    for (int i = 0; i < 5; i++) {
+        serial_puts("A\n");
+        timer_sleep_ms(500);
+        task_yield();
+    }
+}
+
+static void test_task_b(void) {
+    for (int i = 0; i < 5; i++) {
+        serial_puts("B\n");
+        timer_sleep_ms(500);
+        task_yield();
+    }
+}
+
+static void test_task_exit(void) {
+    serial_puts("done\n");
 }
 
 void kmain(void) {
@@ -254,34 +277,39 @@ void kmain(void) {
     pit_init(100);
     timer_init();
 
+    /* Initialize scheduler (before enabling interrupts) */
+    scheduler_init();
+
     /* Enable interrupts */
     serial_puts("cool-os: enabling interrupts\n");
     asm volatile("sti");
 
-    /* Timer validation tests */
+    /* Proto 6 validation tests */
 
-    /* Test 1: Fixed delay test (3 x 1 second) */
-    serial_puts("TIMER: Fixed delay test (3 x 1s)...\n");
-    for (int i = 1; i <= 3; i++) {
-        timer_sleep_ms(1000);
-        serial_puts("wake ");
-        serial_putc('0' + i);
-        serial_puts("\n");
+    /* Test 1: Two task alternation */
+    serial_puts("PROTO6 TEST1: Two task alternation\n");
+    task_t *task_a = task_create(test_task_a);
+    task_t *task_b = task_create(test_task_b);
+    scheduler_add(task_a);
+    scheduler_add(task_b);
+
+    /* Yield repeatedly to let tasks run */
+    while (task_a->state != TASK_FINISHED || task_b->state != TASK_FINISHED) {
+        task_yield();
     }
-    serial_puts("TIMER: Fixed delay test passed\n");
+    serial_puts("PROTO6 TEST1: Complete\n");
 
-    /* Test 2: Chained delay test (200+300+500ms = 1s total) */
-    serial_puts("TIMER: Chained delay test (200+300+500ms)...\n");
-    timer_sleep_ms(200);
-    timer_sleep_ms(300);
-    timer_sleep_ms(500);
-    serial_puts("TIMER: Chained delay test passed\n");
+    /* Test 2: Task exit handling */
+    serial_puts("PROTO6 TEST2: Task exit handling\n");
+    task_t *task_exit = task_create(test_task_exit);
+    scheduler_add(task_exit);
+    while (task_exit->state != TASK_FINISHED) {
+        task_yield();
+    }
+    serial_puts("PROTO6 TEST2: Complete\n");
 
-    /* Test 3: Long delay stability (5 seconds) */
-    serial_puts("TIMER: Long delay test (5s)...\n");
-    timer_sleep_ms(5000);
-    serial_puts("TIMER: Long delay test passed\n");
-
+    /* Test 3: Idle fallback */
+    serial_puts("PROTO6 TEST3: Idle fallback - entering idle\n");
     serial_puts("cool-os: entering idle loop\n");
     for (;;) {
         asm volatile("hlt");

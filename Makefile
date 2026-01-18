@@ -18,8 +18,8 @@ OVMF_VARS := /usr/share/edk2/x64/OVMF_VARS.4m.fd
 LIMINE_VERSION := 8.6.0
 LIMINE_URL := https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/BOOTX64.EFI
 
-C_SRCS := src/kernel.c src/serial.c src/idt.c src/isr.c src/pmm.c src/heap.c src/pic.c src/pit.c src/timer.c
-ASM_SRCS := src/isr_stubs.S
+C_SRCS := src/kernel.c src/serial.c src/idt.c src/isr.c src/pmm.c src/heap.c src/pic.c src/pit.c src/timer.c src/task.c src/scheduler.c
+ASM_SRCS := src/isr_stubs.S src/context_switch.S
 C_OBJS := $(C_SRCS:src/%.c=build/%.o)
 ASM_OBJS := $(ASM_SRCS:src/%.S=build/%.o)
 OBJS := $(C_OBJS) $(ASM_OBJS)
