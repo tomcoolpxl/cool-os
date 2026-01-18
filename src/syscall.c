@@ -11,9 +11,9 @@ extern void syscall_entry(void);
 void syscall_init(void) {
     uint64_t efer;
 
-    /* Enable SYSCALL/SYSRET in EFER */
+    /* Enable SYSCALL/SYSRET and NX in EFER */
     efer = rdmsr(MSR_IA32_EFER);
-    efer |= EFER_SCE;
+    efer |= EFER_SCE | EFER_NXE;
     wrmsr(MSR_IA32_EFER, efer);
 
     /*

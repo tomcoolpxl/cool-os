@@ -39,7 +39,7 @@ static uint64_t *alloc_page_table(void) {
     return virt;
 }
 
-int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable) {
+int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int executable) {
     uint64_t cr3 = read_cr3() & PTE_ADDR_MASK;
     uint64_t *pml4 = (uint64_t *)phys_to_hhdm(cr3);
 
@@ -99,6 +99,9 @@ int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable) {
     uint64_t flags = PTE_PRESENT | PTE_USER;
     if (writable) {
         flags |= PTE_WRITABLE;
+    }
+    if (!executable) {
+        flags |= PTE_NX;
     }
     pt[pt_idx] = (paddr & PTE_ADDR_MASK) | flags;
 

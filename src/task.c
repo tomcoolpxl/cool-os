@@ -171,12 +171,12 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     uint64_t user_code_vaddr = USER_CODE_VADDR + slot * 0x10000;
     uint64_t user_stack_vaddr = USER_STACK_VADDR + slot * 0x10000;
 
-    /* Map user code page at user virtual address (read-only) */
-    int ret = paging_map_user_page(user_code_vaddr, user_code_phys, 0);
+    /* Map user code page at user virtual address (read-only, executable) */
+    int ret = paging_map_user_page(user_code_vaddr, user_code_phys, 0, 1);
     ASSERT(ret == 0);
 
-    /* Map user stack page at user virtual address (read-write) */
-    ret = paging_map_user_page(user_stack_vaddr, user_stack_phys, 1);
+    /* Map user stack page at user virtual address (read-write, non-executable) */
+    ret = paging_map_user_page(user_stack_vaddr, user_stack_phys, 1, 0);
     ASSERT(ret == 0);
 
     /* Copy user code to the user code page (via HHDM for kernel access) */

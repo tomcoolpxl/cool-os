@@ -97,6 +97,7 @@ make test-pf  # Test page fault exception
 - `task_create_user(code, code_size)` creates ring 3 tasks from raw machine code
 - User code/stack mapped at low canonical addresses (0x400000+, 0x800000+)
 - 4-level page table mapping with proper U/S bit for user-space pages
+- NX (No-Execute) bit set on user data/stack pages; code pages remain executable
 - System calls: `SYS_exit`, `SYS_write`, `SYS_yield`
 - User-mode syscall wrappers: `user_exit()`, `user_write()`, `user_yield()`
 - User fault isolation (faults kill task, kernel survives)

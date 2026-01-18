@@ -24,9 +24,10 @@
 /*
  * Map a physical page at a user-space virtual address.
  * Creates page table entries as needed with U/S=1, W=writable.
+ * If executable=0, sets NX bit to prevent code execution.
  * Returns 0 on success, -1 on failure.
  */
-int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable);
+int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int executable);
 
 /*
  * Flush TLB for a specific virtual address.

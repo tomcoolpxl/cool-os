@@ -14,6 +14,7 @@
 #define EFER_SCE            (1 << 0)    /* SYSCALL Enable */
 #define EFER_LME            (1 << 8)    /* Long Mode Enable */
 #define EFER_LMA            (1 << 10)   /* Long Mode Active */
+#define EFER_NXE            (1 << 11)   /* No-Execute Enable */
 
 /* Read a Model-Specific Register */
 static inline uint64_t rdmsr(uint32_t msr) {
