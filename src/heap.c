@@ -39,25 +39,43 @@ static void print_hex(uint64_t val) {
     }
 }
 
-static arena_t *heap_expand(void) {
-    uint64_t phys = pmm_alloc_frame();
-    arena_t *arena = (arena_t *)phys_to_hhdm(phys);
+static arena_t *heap_expand_size(uint64_t needed_size) {
+    /* Calculate how many pages we need */
+    uint64_t arena_header_size = ALIGN_UP(sizeof(arena_t), HEAP_ALIGN);
+    uint64_t total_needed = arena_header_size + sizeof(block_t) + needed_size;
+    uint64_t pages_needed = (total_needed + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (pages_needed < 1) pages_needed = 1;
+
+    /* Allocate contiguous pages */
+    uint64_t first_phys = 0;
+    for (uint64_t i = 0; i < pages_needed; i++) {
+        uint64_t phys = pmm_alloc_frame();
+        if (phys == 0) {
+            return NULL;  /* Out of memory */
+        }
+        if (i == 0) first_phys = phys;
+    }
+
+    arena_t *arena = (arena_t *)phys_to_hhdm(first_phys);
 
     arena->next = NULL;
-    arena->total_size = PAGE_SIZE;
+    arena->total_size = pages_needed * PAGE_SIZE;
 
-    uint64_t arena_header_size = ALIGN_UP(sizeof(arena_t), HEAP_ALIGN);
     block_t *first = (block_t *)((uint8_t *)arena + arena_header_size);
 
     first->magic = HEAP_MAGIC;
     first->free = 1;
-    first->size = PAGE_SIZE - arena_header_size - sizeof(block_t);
+    first->size = arena->total_size - arena_header_size - sizeof(block_t);
     first->next = NULL;
     first->prev = NULL;
 
     arena->first = first;
 
     return arena;
+}
+
+static arena_t *heap_expand(void) {
+    return heap_expand_size(PAGE_SIZE);  /* Default to one page */
 }
 
 void heap_init(void) {
@@ -112,7 +130,10 @@ void *kmalloc(uint64_t size) {
         arena = arena->next;
     }
 
-    arena_t *new_arena = heap_expand();
+    arena_t *new_arena = heap_expand_size(size);
+    if (new_arena == NULL) {
+        return NULL;  /* Out of memory */
+    }
 
     arena = arena_list;
     while (arena->next != NULL) {

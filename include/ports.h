@@ -17,6 +17,24 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
+static inline void outw(uint16_t port, uint16_t val) {
+    asm volatile("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint16_t inw(uint16_t port) {
+    uint16_t ret;
+    asm volatile("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+/*
+ * Read count 16-bit words from port into buffer.
+ * Used for ATA PIO data transfers.
+ */
+static inline void insw(uint16_t port, void *buf, uint32_t count) {
+    asm volatile("rep insw" : "+D"(buf), "+c"(count) : "d"(port) : "memory");
+}
+
 /*
  * I/O delay using port 0x80 (POST diagnostic port).
  * Writing to this port takes ~1 microsecond on most hardware.

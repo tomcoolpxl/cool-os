@@ -18,7 +18,7 @@ OVMF_VARS := /usr/share/edk2/x64/OVMF_VARS.4m.fd
 LIMINE_VERSION := 8.6.0
 LIMINE_URL := https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/BOOTX64.EFI
 
-C_SRCS := src/kernel.c src/serial.c src/gdt.c src/idt.c src/isr.c src/pmm.c src/heap.c src/pic.c src/pit.c src/timer.c src/task.c src/scheduler.c src/syscall.c src/paging.c src/elf.c
+C_SRCS := src/kernel.c src/serial.c src/gdt.c src/idt.c src/isr.c src/pmm.c src/heap.c src/pic.c src/pit.c src/timer.c src/task.c src/scheduler.c src/syscall.c src/paging.c src/elf.c src/block.c src/fat32.c src/vfs.c
 ASM_SRCS := src/isr_stubs.S src/context_switch.S src/syscall_entry.S
 C_OBJS := $(C_SRCS:src/%.c=build/%.o)
 ASM_OBJS := $(ASM_SRCS:src/%.S=build/%.o)
@@ -63,6 +63,16 @@ include/limine.h:
 	@mkdir -p include
 	curl -L -o $@ https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/limine.h
 
+# Data disk image with user programs (for Proto 9 disk-based loading)
+build/data.img: $(USER_ELFS)
+	@mkdir -p build
+	dd if=/dev/zero of=$@ bs=1M count=4
+	mkfs.fat -F 32 $@
+	mcopy -i $@ build/user/init.elf ::INIT.ELF
+	mcopy -i $@ build/user/yield1.elf ::YIELD1.ELF
+	mcopy -i $@ build/user/yield2.elf ::YIELD2.ELF
+	mcopy -i $@ build/user/fault.elf ::FAULT.ELF
+
 esp.img: build/esp.img
 
 build/esp.img: build/kernel.elf build/BOOTX64.EFI limine.conf $(USER_ELFS)
@@ -83,7 +93,7 @@ build/OVMF_VARS.4m.fd: $(OVMF_VARS)
 	@mkdir -p build
 	cp $(OVMF_VARS) $@
 
-run: build/esp.img build/OVMF_VARS.4m.fd
+run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 	qemu-system-x86_64 \
 		-enable-kvm \
 		-cpu host \
@@ -92,7 +102,8 @@ run: build/esp.img build/OVMF_VARS.4m.fd
 		-no-shutdown \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=build/OVMF_VARS.4m.fd \
-		-drive format=raw,file=build/esp.img \
+		-drive format=raw,file=build/esp.img,if=ide,index=0 \
+		-drive format=raw,file=build/data.img,if=ide,index=1 \
 		-serial stdio \
 		-display none
 

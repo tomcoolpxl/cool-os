@@ -11,7 +11,8 @@
       "Bash(make:*)",
       "WebFetch(domain:github.com)",
       "Bash(nm:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep:*)"
     ]
   }
 }

@@ -16,6 +16,9 @@
 #include "scheduler.h"
 #include "syscall.h"
 #include "elf.h"
+#include "block.h"
+#include "fat32.h"
+#include "vfs.h"
 
 void kmain(void);
 
@@ -330,6 +333,13 @@ void kmain(void) {
     /* Initialize SYSCALL/SYSRET mechanism */
     syscall_init();
 
+    /* Initialize block device, filesystem, and VFS */
+    if (block_init() == 0) {
+        if (fat_mount() == 0) {
+            vfs_init();
+        }
+    }
+
     /* Heap validation test 1: Basic alloc/free */
     serial_puts("HEAP: Running basic allocation test...\n");
     void *p1 = kmalloc(64);
@@ -567,6 +577,46 @@ void kmain(void) {
         } else {
             serial_puts("PROTO8 TEST3: fault.elf not found\n");
         }
+    }
+
+    /* Proto 9 validation tests (Disk-based ELF loading) */
+    serial_puts("\n=== PROTO9 TESTS (Filesystem) ===\n");
+
+    /* Test 1: Load and run INIT.ELF from disk */
+    serial_puts("PROTO9 TEST1: Load init.elf from disk\n");
+    task_t *disk_init = task_create_from_path("INIT.ELF");
+    if (disk_init != NULL) {
+        scheduler_add(disk_init);
+        while (disk_init->state != TASK_FINISHED) {
+            task_yield();
+        }
+        serial_puts("PROTO9 TEST1: Complete\n");
+    } else {
+        serial_puts("PROTO9 TEST1: Failed to load INIT.ELF\n");
+    }
+
+    /* Test 2: Load and run YIELD1.ELF + YIELD2.ELF from disk */
+    serial_puts("PROTO9 TEST2: Load yield1/yield2 from disk\n");
+    task_t *disk_y1 = task_create_from_path("YIELD1.ELF");
+    task_t *disk_y2 = task_create_from_path("YIELD2.ELF");
+    if (disk_y1 != NULL && disk_y2 != NULL) {
+        scheduler_add(disk_y1);
+        scheduler_add(disk_y2);
+        while (disk_y1->state != TASK_FINISHED || disk_y2->state != TASK_FINISHED) {
+            task_yield();
+        }
+        serial_puts("\nPROTO9 TEST2: Complete\n");
+    } else {
+        serial_puts("PROTO9 TEST2: Failed to load yield ELFs\n");
+    }
+
+    /* Test 3: Verify nonexistent file returns NULL */
+    serial_puts("PROTO9 TEST3: Nonexistent file test\n");
+    task_t *nofile = task_create_from_path("NOFILE.ELF");
+    if (nofile == NULL) {
+        serial_puts("PROTO9 TEST3: Correctly returned NULL for missing file\n");
+    } else {
+        serial_puts("PROTO9 TEST3: ERROR - should have returned NULL\n");
     }
 
     serial_puts("\ncool-os: entering idle loop\n");

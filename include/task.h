@@ -51,6 +51,13 @@ task_t *task_create_user(const void *code, uint64_t code_size);
  */
 task_t *task_create_elf(const void *data, uint64_t size);
 
+/*
+ * Create a user-mode task from an ELF file on disk.
+ * path: File path (e.g., "INIT.ELF")
+ * Returns task on success, NULL on failure.
+ */
+task_t *task_create_from_path(const char *path);
+
 void task_yield(void);
 task_t *task_current(void);
 

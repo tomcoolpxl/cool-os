@@ -10,6 +10,7 @@
 #include "paging.h"
 #include "serial.h"
 #include "elf.h"
+#include "vfs.h"
 
 static uint64_t next_task_id = 0;
 
@@ -345,6 +346,58 @@ task_t *task_create_elf(const void *data, uint64_t size) {
     *(--sp) = 0;  /* rbp */
 
     task->rsp = (uint64_t)sp;
+
+    return task;
+}
+
+task_t *task_create_from_path(const char *path) {
+    if (path == NULL) {
+        serial_puts("task_create_from_path: NULL path\n");
+        return NULL;
+    }
+
+    serial_puts("task_create_from_path: Loading ");
+    serial_puts(path);
+    serial_puts("\n");
+
+    /* Open the file */
+    int fd = vfs_open(path);
+    if (fd < 0) {
+        serial_puts("task_create_from_path: File not found\n");
+        return NULL;
+    }
+
+    /* Get file size */
+    uint32_t size = vfs_size(fd);
+    if (size == 0) {
+        serial_puts("task_create_from_path: Empty file\n");
+        vfs_close(fd);
+        return NULL;
+    }
+
+    /* Allocate buffer for ELF data */
+    void *buf = kmalloc(size);
+    if (buf == NULL) {
+        serial_puts("task_create_from_path: Out of memory\n");
+        vfs_close(fd);
+        return NULL;
+    }
+
+    /* Read file contents */
+    int bytes_read = vfs_read(fd, buf, size);
+    vfs_close(fd);
+
+    if (bytes_read != (int)size) {
+        serial_puts("task_create_from_path: Read error\n");
+        kfree(buf);
+        return NULL;
+    }
+
+    /* Create task from ELF data */
+    task_t *task = task_create_elf(buf, size);
+
+    /* Free the buffer (ELF loader copies data to user pages) */
+    kfree(buf);
 
     return task;
 }
