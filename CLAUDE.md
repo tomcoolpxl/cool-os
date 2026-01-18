@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 7 complete (user mode and syscalls). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 8 complete (ELF loader). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -103,11 +103,31 @@ make test-pf  # Test page fault exception
 - User fault isolation (faults kill task, kernel survives)
 - Kernel higher-half pages remain supervisor-only (U/S=0)
 
+### Proto 8: ELF64 Loader
+- ELF64 executable loader for real user programs
+- Limine module support for loading user programs from boot image
+- `task_create_elf(data, size)` creates user tasks from ELF files
+- `elf_load_at()` supports loading at unique addresses (multi-program support)
+- User programs linked at 0x400000, relocated to 0x1000000+ for isolation
+- User stack at 0x70000000 (16 KiB, NX protected)
+- Validates: ELF magic, x86-64, PT_LOAD segments, user address range
+- Maps segments with correct permissions: R/W/X → U/S=1, NX appropriately
+
+## User Programs
+
+User programs are in `user/` directory:
+- `init.S` - Hello world (prints message, exits)
+- `yield1.S` / `yield2.S` - Yield test (alternating output)
+- `fault.S` - Privilege separation test (jumps to kernel address)
+
+Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine modules.
+
 ## Source Structure
 
 ```
 include/
   cpu.h       - CPU control (read CR2/CR3, halt)
+  elf.h       - ELF64 structures and loader API
   gdt.h       - GDT structures and segment selectors
   heap.h      - Heap API (kmalloc/kfree)
   hhdm.h      - Higher-half direct map helpers
@@ -124,12 +144,13 @@ include/
   scheduler.h - Scheduler API (init/add/yield)
   serial.h    - Serial port I/O
   syscall.h   - Syscall numbers and dispatcher
-  task.h      - Task API (create/create_user/yield/current)
+  task.h      - Task API (create/create_user/create_elf/yield/current)
   timer.h     - Timer subsystem API (sleep/delay functions)
   user.h      - User-mode syscall wrappers
 
 src/
   context_switch.S - Assembly context switch routine
+  elf.c       - ELF64 loader implementation
   gdt.c       - GDT and TSS initialization
   heap.c      - Arena-based heap implementation
   idt.c       - IDT setup
@@ -144,8 +165,15 @@ src/
   serial.c    - Serial port driver
   syscall.c   - Syscall initialization and dispatch
   syscall_entry.S - Assembly SYSCALL/SYSRET entry point
-  task.c      - Task creation and user mode support
+  task.c      - Task creation and user/ELF mode support
   timer.c     - Timer services and IRQ handler
+
+user/
+  init.S      - Hello world user program
+  yield1.S    - Yield test program 1
+  yield2.S    - Yield test program 2
+  fault.S     - Privilege separation test
+  user.ld     - Linker script for user programs
 ```
 
 ## Design Philosophy

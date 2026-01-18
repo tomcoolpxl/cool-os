@@ -38,6 +38,19 @@ task_t *task_create_user(const void *code, uint64_t code_size);
 /* User-space virtual addresses for task memory layout */
 #define USER_CODE_VADDR  0x400000ULL   /* User code starts here */
 #define USER_STACK_VADDR 0x800000ULL   /* User stack region (grows down from top) */
+
+/* ELF user stack configuration */
+#define USER_ELF_STACK_TOP   0x70000000ULL  /* Top of ELF user stack */
+#define USER_ELF_STACK_PAGES 4              /* 16 KiB stack */
+
+/*
+ * Create a user-mode task from an ELF64 executable.
+ * data: pointer to ELF file data in memory
+ * size: size of ELF file
+ * Returns task on success, NULL on failure.
+ */
+task_t *task_create_elf(const void *data, uint64_t size);
+
 void task_yield(void);
 task_t *task_current(void);
 

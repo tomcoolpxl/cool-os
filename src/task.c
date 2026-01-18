@@ -9,6 +9,7 @@
 #include "gdt.h"
 #include "paging.h"
 #include "serial.h"
+#include "elf.h"
 
 static uint64_t next_task_id = 0;
 
@@ -219,6 +220,123 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     *(--sp) = (uint64_t)user_task_trampoline;
 
     /* Callee-saved registers (pushed in order: rbp, rbx, r12, r13, r14, r15) */
+    *(--sp) = 0;  /* r15 */
+    *(--sp) = 0;  /* r14 */
+    *(--sp) = 0;  /* r13 */
+    *(--sp) = 0;  /* r12 */
+    *(--sp) = 0;  /* rbx */
+    *(--sp) = 0;  /* rbp */
+
+    task->rsp = (uint64_t)sp;
+
+    return task;
+}
+
+/* Counter for unique ELF user address allocation per task */
+static uint64_t next_elf_slot = 0;
+
+/* ELF code base address and spacing between tasks */
+#define ELF_CODE_BASE   0x1000000ULL    /* 16 MB - base for ELF code */
+#define ELF_SLOT_SIZE   0x100000ULL     /* 1 MB spacing between ELF programs */
+
+task_t *task_create_elf(const void *data, uint64_t size) {
+    if (data == NULL || size == 0) {
+        serial_puts("task_create_elf: Invalid parameters\n");
+        return NULL;
+    }
+
+    /* Get unique slot for this task's code address */
+    uint64_t elf_slot = next_elf_slot++;
+    uint64_t load_addr = ELF_CODE_BASE + elf_slot * ELF_SLOT_SIZE;
+
+    /* Load the ELF executable into user address space at unique address */
+    elf_info_t elf_info;
+    if (elf_load_at(data, size, load_addr, &elf_info) != 0) {
+        serial_puts("task_create_elf: ELF load failed\n");
+        return NULL;
+    }
+
+    /* Allocate task struct from heap */
+    task_t *task = kmalloc(sizeof(task_t));
+    if (task == NULL) {
+        serial_puts("task_create_elf: Out of memory for task struct\n");
+        return NULL;
+    }
+
+    /* Allocate kernel stack from PMM (for syscalls and interrupts) */
+    uint64_t kernel_stack_phys = pmm_alloc_frame();
+    if (kernel_stack_phys == 0) {
+        kfree(task);
+        serial_puts("task_create_elf: Out of memory for kernel stack\n");
+        return NULL;
+    }
+    void *kernel_stack_base = (void *)phys_to_hhdm(kernel_stack_phys);
+
+    /* Use same slot for stack (already allocated for code) */
+    uint64_t stack_slot = elf_slot;
+
+    /* Calculate user stack base address (each task gets separate stack region) */
+    uint64_t user_stack_top = USER_ELF_STACK_TOP - stack_slot * (USER_ELF_STACK_PAGES * 0x1000 + 0x1000);
+    uint64_t user_stack_base = user_stack_top - USER_ELF_STACK_PAGES * 0x1000;
+
+    /* Allocate and map user stack pages */
+    for (int i = 0; i < USER_ELF_STACK_PAGES; i++) {
+        uint64_t stack_phys = pmm_alloc_frame();
+        if (stack_phys == 0) {
+            /* TODO: cleanup already allocated pages */
+            kfree(task);
+            serial_puts("task_create_elf: Out of memory for user stack\n");
+            return NULL;
+        }
+
+        /* Zero the stack page */
+        uint8_t *stack_page = (uint8_t *)phys_to_hhdm(stack_phys);
+        for (int j = 0; j < 4096; j++) {
+            stack_page[j] = 0;
+        }
+
+        /* Map user stack page (read-write, non-executable) */
+        uint64_t page_vaddr = user_stack_base + i * 0x1000;
+        if (paging_map_user_page(page_vaddr, stack_phys, 1, 0) != 0) {
+            kfree(task);
+            serial_puts("task_create_elf: Failed to map user stack\n");
+            return NULL;
+        }
+    }
+
+    /* Initialize task struct */
+    task->stack_base = kernel_stack_base;
+    task->entry = NULL;  /* Not used for user tasks */
+    task->state = TASK_READY;
+    task->id = next_task_id++;
+    task->next = NULL;
+
+    /* User mode fields */
+    task->is_user = 1;
+    task->user_rip = elf_info.entry;
+    task->user_stack_base = (void *)user_stack_base;
+
+    /*
+     * Set up user stack:
+     * - RSP must be 16-byte aligned at user entry
+     * - Push a fake return address (0) so if user code tries to return, it faults
+     */
+    task->user_rsp = user_stack_top - 8;  /* Space for fake return address */
+
+    /* Kernel stack top for syscalls/interrupts */
+    task->kernel_rsp = (uint64_t)kernel_stack_base + TASK_STACK_SIZE;
+
+    /*
+     * Set up kernel stack frame for context_switch.
+     * First context_switch will "return" to user_task_trampoline,
+     * which then does iretq to enter user mode.
+     */
+    uint64_t *sp = (uint64_t *)((uint8_t *)kernel_stack_base + TASK_STACK_SIZE);
+
+    /* Return address - where context_switch's ret will jump */
+    *(--sp) = (uint64_t)user_task_trampoline;
+
+    /* Callee-saved registers */
     *(--sp) = 0;  /* r15 */
     *(--sp) = 0;  /* r14 */
     *(--sp) = 0;  /* r13 */

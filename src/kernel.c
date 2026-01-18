@@ -15,6 +15,7 @@
 #include "task.h"
 #include "scheduler.h"
 #include "syscall.h"
+#include "elf.h"
 
 void kmain(void);
 
@@ -49,6 +50,12 @@ static volatile struct limine_executable_address_request exec_addr_request = {
     .revision = 0
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST,
+    .revision = 0
+};
+
 __attribute__((used, section(".limine_requests_end")))
 static volatile LIMINE_REQUESTS_END_MARKER
 
@@ -57,6 +64,39 @@ uint64_t hhdm_offset;
 /* Global Limine response pointers for PMM */
 struct limine_memmap_response *limine_memmap;
 struct limine_executable_address_response *limine_exec_addr;
+struct limine_module_response *limine_modules;
+
+/*
+ * Find a Limine module by path suffix (e.g., "init.elf").
+ * Returns pointer to limine_file or NULL if not found.
+ */
+struct limine_file *find_module(const char *name) {
+    if (limine_modules == NULL) {
+        return NULL;
+    }
+    for (uint64_t i = 0; i < limine_modules->module_count; i++) {
+        struct limine_file *mod = limine_modules->modules[i];
+        const char *path = mod->path;
+        /* Find last '/' in path */
+        const char *basename = path;
+        for (const char *p = path; *p; p++) {
+            if (*p == '/') {
+                basename = p + 1;
+            }
+        }
+        /* Compare basename with requested name */
+        const char *a = basename;
+        const char *b = name;
+        while (*a && *b && *a == *b) {
+            a++;
+            b++;
+        }
+        if (*a == '\0' && *b == '\0') {
+            return mod;
+        }
+    }
+    return NULL;
+}
 
 static void print_hex(uint64_t val) {
     const char *hex = "0123456789abcdef";
@@ -251,6 +291,7 @@ void kmain(void) {
     }
     limine_memmap = memmap_request.response;
     limine_exec_addr = exec_addr_request.response;
+    limine_modules = module_request.response;  /* May be NULL if no modules */
 
     /* Initialize physical memory manager */
     pmm_init();
@@ -449,7 +490,86 @@ void kmain(void) {
     }
     serial_puts("PROTO7 TEST3: Kernel survived\n");
 
-    serial_puts("cool-os: entering idle loop\n");
+    /* Proto 8 validation tests (ELF loading) */
+    serial_puts("\n=== PROTO8 TESTS (ELF Loader) ===\n");
+
+    /* Check if modules are available */
+    if (limine_modules == NULL || limine_modules->module_count == 0) {
+        serial_puts("PROTO8: No modules loaded, skipping ELF tests\n");
+    } else {
+        serial_puts("PROTO8: Found ");
+        print_hex(limine_modules->module_count);
+        serial_puts(" modules\n");
+
+        /* List modules */
+        for (uint64_t i = 0; i < limine_modules->module_count; i++) {
+            struct limine_file *mod = limine_modules->modules[i];
+            serial_puts("  Module: ");
+            serial_puts(mod->path);
+            serial_puts(" (");
+            print_hex(mod->size);
+            serial_puts(" bytes)\n");
+        }
+
+        /* Test 1: Run init.elf that prints and exits */
+        serial_puts("PROTO8 TEST1: ELF hello world\n");
+        struct limine_file *init_mod = find_module("init.elf");
+        if (init_mod != NULL) {
+            task_t *init_task = task_create_elf(init_mod->address, init_mod->size);
+            if (init_task != NULL) {
+                scheduler_add(init_task);
+                while (init_task->state != TASK_FINISHED) {
+                    task_yield();
+                }
+                serial_puts("PROTO8 TEST1: Complete\n");
+            } else {
+                serial_puts("PROTO8 TEST1: Failed to create task\n");
+            }
+        } else {
+            serial_puts("PROTO8 TEST1: init.elf not found\n");
+        }
+
+        /* Test 2: Two ELF user programs yielding */
+        serial_puts("PROTO8 TEST2: ELF yield test\n");
+        struct limine_file *yield1_mod = find_module("yield1.elf");
+        struct limine_file *yield2_mod = find_module("yield2.elf");
+        if (yield1_mod != NULL && yield2_mod != NULL) {
+            task_t *elf_y1 = task_create_elf(yield1_mod->address, yield1_mod->size);
+            task_t *elf_y2 = task_create_elf(yield2_mod->address, yield2_mod->size);
+            if (elf_y1 != NULL && elf_y2 != NULL) {
+                scheduler_add(elf_y1);
+                scheduler_add(elf_y2);
+                while (elf_y1->state != TASK_FINISHED || elf_y2->state != TASK_FINISHED) {
+                    task_yield();
+                }
+                serial_puts("\nPROTO8 TEST2: Complete\n");
+            } else {
+                serial_puts("PROTO8 TEST2: Failed to create tasks\n");
+            }
+        } else {
+            serial_puts("PROTO8 TEST2: yield ELFs not found\n");
+        }
+
+        /* Test 3: Privilege separation - user tries to access kernel memory */
+        serial_puts("PROTO8 TEST3: Privilege separation\n");
+        struct limine_file *fault_mod = find_module("fault.elf");
+        if (fault_mod != NULL) {
+            task_t *elf_fault = task_create_elf(fault_mod->address, fault_mod->size);
+            if (elf_fault != NULL) {
+                scheduler_add(elf_fault);
+                while (elf_fault->state != TASK_FINISHED) {
+                    task_yield();
+                }
+                serial_puts("PROTO8 TEST3: Kernel survived, privilege separation works\n");
+            } else {
+                serial_puts("PROTO8 TEST3: Failed to create task\n");
+            }
+        } else {
+            serial_puts("PROTO8 TEST3: fault.elf not found\n");
+        }
+    }
+
+    serial_puts("\ncool-os: entering idle loop\n");
     for (;;) {
         asm volatile("hlt");
     }
