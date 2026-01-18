@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 8 complete (ELF loader). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 9 complete (Filesystem). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -32,6 +32,7 @@ make test-pf  # Test page fault exception
   - `EFI/BOOT/BOOTX64.EFI` (Limine)
   - `limine.conf`
   - Kernel binary
+- `build/data.img` - FAT32 data disk containing user ELF programs (INIT.ELF, YIELD1.ELF, etc.)
 
 ## Toolchain
 
@@ -45,8 +46,9 @@ make test-pf  # Test page fault exception
 - OVMF_VARS.4m.fd (writable copy per VM)
 - KVM acceleration enabled
 - Serial redirected to host terminal (`-serial stdio`)
+- Two IDE drives: esp.img (boot, index 0) and data.img (data, index 1)
 
-## Implemented Features (Proto 1-7)
+## Implemented Features (Proto 1-9)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -113,6 +115,17 @@ make test-pf  # Test page fault exception
 - Validates: ELF magic, x86-64, PT_LOAD segments, user address range
 - Maps segments with correct permissions: R/W/X → U/S=1, NX appropriately
 
+### Proto 9: Filesystem and Disk-Backed Loading
+- ATA PIO driver for IDE disk access (ports 0x1F0-0x1F7, LBA28 addressing)
+- FAT32 filesystem driver (read-only, superfloppy layout, 8.3 filenames)
+- VFS layer with file descriptor table (16 slots)
+- `task_create_from_path(path)` loads ELF from disk (e.g., "INIT.ELF")
+- Block device interface: `block_init()`, `block_read(lba, count, dst)`
+- FAT32 API: `fat_mount()`, `fat_open()`, `fat_read()`, `fat_seek()`, `fat_close()`, `fat_get_size()`
+- VFS API: `vfs_init()`, `vfs_open()`, `vfs_read()`, `vfs_seek()`, `vfs_close()`, `vfs_size()`
+- Heap enhanced to support multi-page allocations for larger files
+- Data disk (data.img) attached as IDE slave drive
+
 ## User Programs
 
 User programs are in `user/` directory:
@@ -126,8 +139,10 @@ Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine mo
 
 ```
 include/
+  block.h     - Block device interface (ATA PIO)
   cpu.h       - CPU control (read CR2/CR3, halt)
   elf.h       - ELF64 structures and loader API
+  fat32.h     - FAT32 filesystem structures and API
   gdt.h       - GDT structures and segment selectors
   heap.h      - Heap API (kmalloc/kfree)
   hhdm.h      - Higher-half direct map helpers
@@ -140,19 +155,22 @@ include/
   pic.h       - 8259A PIC driver API
   pit.h       - 8253/8254 PIT driver API
   pmm.h       - Physical memory manager API
-  ports.h     - I/O port access (inb/outb/io_wait)
+  ports.h     - I/O port access (inb/outb/inw/outw/insw/io_wait)
   scheduler.h - Scheduler API (init/add/yield)
   serial.h    - Serial port I/O
   syscall.h   - Syscall numbers and dispatcher
-  task.h      - Task API (create/create_user/create_elf/yield/current)
+  task.h      - Task API (create/create_user/create_elf/create_from_path/yield/current)
   timer.h     - Timer subsystem API (sleep/delay functions)
   user.h      - User-mode syscall wrappers
+  vfs.h       - Virtual filesystem API
 
 src/
+  block.c     - ATA PIO driver implementation
   context_switch.S - Assembly context switch routine
   elf.c       - ELF64 loader implementation
+  fat32.c     - FAT32 filesystem driver
   gdt.c       - GDT and TSS initialization
-  heap.c      - Arena-based heap implementation
+  heap.c      - Arena-based heap implementation (multi-page support)
   idt.c       - IDT setup
   isr.c       - Exception handlers (with user fault handling)
   isr_stubs.S - Assembly ISR/IRQ entry points
@@ -165,8 +183,9 @@ src/
   serial.c    - Serial port driver
   syscall.c   - Syscall initialization and dispatch
   syscall_entry.S - Assembly SYSCALL/SYSRET entry point
-  task.c      - Task creation and user/ELF mode support
+  task.c      - Task creation and user/ELF/disk mode support
   timer.c     - Timer services and IRQ handler
+  vfs.c       - VFS layer implementation
 
 user/
   init.S      - Hello world user program
@@ -182,3 +201,29 @@ user/
 - Deterministic behavior for teaching/debugging
 - No premature optimization
 - Standard PC platform only (no hardware-specific dependencies)
+
+## Next Prototype (Planned)
+
+### Proto 10: Fixed-Resolution Framebuffer (960x540) and Software Blitter
+
+See `prototype10.md` for full specification.
+
+**Purpose**: Introduce graphical output using the UEFI framebuffer via Limine with a fixed internal rendering resolution of 960x540, 32-bit true color.
+
+**Key Features**:
+- Limine framebuffer mode request (prefer 960x540x32, fallback to scaling)
+- Back buffer allocation at fixed 960x540 resolution (~2 MB)
+- Software nearest-neighbor scaling blitter to hardware framebuffer
+- Double buffering (render to back buffer, present to front buffer)
+- Drawing primitives: `fb_putpixel()`, `fb_clear()`, `fb_fill_rect()`
+- `fb_present()` scales and copies back buffer to front buffer
+- Frame pacing at 60 FPS using `timer_sleep_ms()`
+- Resolution independence (works on 1080p, 1440p, 4K displays)
+
+**Validation Tests**:
+1. Solid fill (blue screen, proper scaling)
+2. Moving rectangle (smooth animation, no flicker)
+3. Resolution independence (verify 960x540 logical regardless of hardware)
+4. Stress render (60 FPS color alternation for 10 seconds)
+
+**Dependencies**: Limine framebuffer, HHDM, heap/PMM, timer API, paging
