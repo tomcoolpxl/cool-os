@@ -171,7 +171,7 @@ static const uint8_t user_yield_code1[] = {
     0xb8, 0x02, 0x00, 0x00, 0x00,               /* 30: mov eax, 2 */
     0x0f, 0x05,                                 /* 35: syscall */
     0x41, 0xff, 0xcc,                           /* 37: dec r12d */
-    0x75, 0xdf,                                 /* 40: jnz -33 (to offset 6) */
+    0x75, 0xdc,                                 /* 40: jnz -36 (to offset 6: 42-36=6) */
     0x31, 0xff,                                 /* 42: xor edi, edi */
     0x31, 0xc0,                                 /* 44: xor eax, eax */
     0x0f, 0x05,                                 /* 46: syscall */
@@ -189,7 +189,7 @@ static const uint8_t user_yield_code2[] = {
     0xb8, 0x02, 0x00, 0x00, 0x00,
     0x0f, 0x05,
     0x41, 0xff, 0xcc,
-    0x75, 0xdf,
+    0x75, 0xdc,                                 /* jnz -36 (to offset 6) */
     0x31, 0xff,
     0x31, 0xc0,
     0x0f, 0x05,
@@ -420,13 +420,9 @@ void kmain(void) {
 
     /* Proto 7 validation tests */
 
-    /* Make kernel pages user-accessible for user mode execution */
-    serial_puts("PAGING: Making kernel pages user-accessible\n");
-    paging_set_user_accessible((uint64_t)__kernel_start, (uint64_t)__kernel_end);
-
     /* Test 1: Hello from user mode */
     serial_puts("PROTO7 TEST1: Hello from user mode\n");
-    task_t *user_task1 = task_create_user(user_hello);
+    task_t *user_task1 = task_create_user(user_hello_code, sizeof(user_hello_code));
     scheduler_add(user_task1);
     while (user_task1->state != TASK_FINISHED) {
         task_yield();
@@ -435,8 +431,8 @@ void kmain(void) {
 
     /* Test 2: User yield test (two user tasks alternating) */
     serial_puts("PROTO7 TEST2: User yield test\n");
-    task_t *u1 = task_create_user(user_yield_task1);
-    task_t *u2 = task_create_user(user_yield_task2);
+    task_t *u1 = task_create_user(user_yield_code1, sizeof(user_yield_code1));
+    task_t *u2 = task_create_user(user_yield_code2, sizeof(user_yield_code2));
     scheduler_add(u1);
     scheduler_add(u2);
     while (u1->state != TASK_FINISHED || u2->state != TASK_FINISHED) {
@@ -446,7 +442,7 @@ void kmain(void) {
 
     /* Test 3: Fault isolation (user fault doesn't crash kernel) */
     serial_puts("PROTO7 TEST3: Fault isolation\n");
-    task_t *fault_task = task_create_user(user_fault_test);
+    task_t *fault_task = task_create_user(user_fault_code, sizeof(user_fault_code));
     scheduler_add(fault_task);
     while (fault_task->state != TASK_FINISHED) {
         task_yield();

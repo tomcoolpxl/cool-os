@@ -94,11 +94,13 @@ make test-pf  # Test page fault exception
 - Custom GDT with kernel (DPL=0) and user (DPL=3) segments
 - TSS for RSP0 stack switching on ring transitions
 - SYSCALL/SYSRET via MSR configuration (STAR, LSTAR, FMASK)
-- `task_create_user(entry)` for ring 3 tasks
+- `task_create_user(code, code_size)` creates ring 3 tasks from raw machine code
+- User code/stack mapped at low canonical addresses (0x400000+, 0x800000+)
+- 4-level page table mapping with proper U/S bit for user-space pages
 - System calls: `SYS_exit`, `SYS_write`, `SYS_yield`
 - User-mode syscall wrappers: `user_exit()`, `user_write()`, `user_yield()`
 - User fault isolation (faults kill task, kernel survives)
-- Page table manipulation to set U/S bit for user access
+- Kernel higher-half pages remain supervisor-only (U/S=0)
 
 ## Source Structure
 
@@ -133,7 +135,7 @@ src/
   isr.c       - Exception handlers (with user fault handling)
   isr_stubs.S - Assembly ISR/IRQ entry points
   kernel.c    - Main kernel entry (kmain)
-  paging.c    - Page table U/S bit manipulation
+  paging.c    - User-space page table mapping (4-level paging)
   pic.c       - 8259A PIC driver implementation
   pit.c       - 8253/8254 PIT driver implementation
   pmm.c       - Bitmap PMM implementation
