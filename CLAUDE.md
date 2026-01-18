@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 6 complete (cooperative multitasking). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 7 complete (user mode and syscalls). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -46,7 +46,7 @@ make test-pf  # Test page fault exception
 - KVM acceleration enabled
 - Serial redirected to host terminal (`-serial stdio`)
 
-## Implemented Features (Proto 1-6)
+## Implemented Features (Proto 1-7)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -90,15 +90,29 @@ make test-pf  # Test page fault exception
 - Idle task running `hlt` loop when no tasks are ready
 - Task states: RUNNING, READY, FINISHED
 
+### Proto 7: User Mode and System Calls
+- Custom GDT with kernel (DPL=0) and user (DPL=3) segments
+- TSS for RSP0 stack switching on ring transitions
+- SYSCALL/SYSRET via MSR configuration (STAR, LSTAR, FMASK)
+- `task_create_user(entry)` for ring 3 tasks
+- System calls: `SYS_exit`, `SYS_write`, `SYS_yield`
+- User-mode syscall wrappers: `user_exit()`, `user_write()`, `user_yield()`
+- User fault isolation (faults kill task, kernel survives)
+- Page table manipulation to set U/S bit for user access
+
 ## Source Structure
 
 ```
 include/
+  cpu.h       - CPU control (read CR2/CR3, halt)
+  gdt.h       - GDT structures and segment selectors
   heap.h      - Heap API (kmalloc/kfree)
   hhdm.h      - Higher-half direct map helpers
   idt.h       - IDT structures and init
   isr.h       - Interrupt frame and handler declarations
   limine.h    - Limine bootloader protocol
+  msr.h       - Model-Specific Register access (rdmsr/wrmsr)
+  paging.h    - Page table manipulation
   panic.h     - ASSERT macro and panic()
   pic.h       - 8259A PIC driver API
   pit.h       - 8253/8254 PIT driver API
@@ -106,22 +120,28 @@ include/
   ports.h     - I/O port access (inb/outb/io_wait)
   scheduler.h - Scheduler API (init/add/yield)
   serial.h    - Serial port I/O
-  task.h      - Task API (create/yield/current)
+  syscall.h   - Syscall numbers and dispatcher
+  task.h      - Task API (create/create_user/yield/current)
   timer.h     - Timer subsystem API (sleep/delay functions)
+  user.h      - User-mode syscall wrappers
 
 src/
   context_switch.S - Assembly context switch routine
+  gdt.c       - GDT and TSS initialization
   heap.c      - Arena-based heap implementation
   idt.c       - IDT setup
-  isr.c       - Exception handlers
+  isr.c       - Exception handlers (with user fault handling)
   isr_stubs.S - Assembly ISR/IRQ entry points
   kernel.c    - Main kernel entry (kmain)
+  paging.c    - Page table U/S bit manipulation
   pic.c       - 8259A PIC driver implementation
   pit.c       - 8253/8254 PIT driver implementation
   pmm.c       - Bitmap PMM implementation
   scheduler.c - Round-robin scheduler implementation
   serial.c    - Serial port driver
-  task.c      - Task creation and management
+  syscall.c   - Syscall initialization and dispatch
+  syscall_entry.S - Assembly SYSCALL/SYSRET entry point
+  task.c      - Task creation and user mode support
   timer.c     - Timer services and IRQ handler
 ```
 

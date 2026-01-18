@@ -1,6 +1,8 @@
 #include "isr.h"
 #include "cpu.h"
 #include "serial.h"
+#include "task.h"
+#include "scheduler.h"
 
 /* Re-entrancy guard to prevent recursive exceptions during crash report */
 static volatile int in_handler = 0;
@@ -83,6 +85,41 @@ static void print_pf_error(uint64_t error_code) {
 void isr_handler(struct interrupt_frame *frame) {
     /* Disable interrupts (should already be disabled by interrupt gate) */
     asm volatile("cli");
+
+    /*
+     * Check if fault came from user mode (RPL of CS is 3).
+     * If so, kill the task and yield instead of crashing the kernel.
+     */
+    int from_user = (frame->cs & 3) == 3;
+    if (from_user) {
+        serial_puts("USER FAULT: Task ");
+        /* Print task ID as hex digit */
+        task_t *t = task_current();
+        if (t) {
+            serial_putc('0' + (char)(t->id % 10));
+        }
+        serial_puts(" killed (");
+        if (frame->vector < 32) {
+            /* Print just the exception name */
+            if (frame->vector == 6) serial_puts("#UD");
+            else if (frame->vector == 13) serial_puts("#GP");
+            else if (frame->vector == 14) serial_puts("#PF");
+            else serial_puts("exception");
+        } else {
+            serial_puts("exception");
+        }
+        serial_puts(") at RIP ");
+        print_hex64(frame->rip);
+        serial_puts("\n");
+
+        /* Mark task as finished and yield to let scheduler pick next task */
+        if (t) {
+            t->state = TASK_FINISHED;
+        }
+        scheduler_yield();
+        /* Should not return, but just in case */
+        return;
+    }
 
     /* Re-entrancy guard: if we fault while handling a fault, halt immediately */
     if (in_handler) {

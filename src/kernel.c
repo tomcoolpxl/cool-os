@@ -5,6 +5,7 @@
 #include "serial.h"
 #include "panic.h"
 #include "hhdm.h"
+#include "gdt.h"
 #include "idt.h"
 #include "pmm.h"
 #include "heap.h"
@@ -13,6 +14,7 @@
 #include "timer.h"
 #include "task.h"
 #include "scheduler.h"
+#include "syscall.h"
 
 void kmain(void);
 
@@ -100,6 +102,105 @@ static void test_task_exit(void) {
     serial_puts("done\n");
 }
 
+/*
+ * Proto 7 user programs as raw machine code
+ *
+ * These are position-independent programs that run at user-space virtual
+ * addresses (0x400000+). Each program only uses syscalls (no kernel addresses).
+ *
+ * Syscall ABI (System V AMD64):
+ *   RAX = syscall number (0=exit, 1=write, 2=yield)
+ *   RDI = arg1, RSI = arg2, RDX = arg3
+ *   SYSCALL instruction
+ */
+
+/*
+ * user_hello_code: prints "Hello from user mode!\n" and exits
+ *
+ * Assembly (30 bytes code + 22 bytes message = 52 bytes total):
+ *   lea rsi, [rip+23]    ; message at offset 30, rip after lea = 7
+ *   mov edi, 1           ; fd = stdout
+ *   mov edx, 22          ; len
+ *   mov eax, 1           ; SYS_write
+ *   syscall
+ *   xor edi, edi         ; exit code = 0
+ *   xor eax, eax         ; SYS_exit
+ *   syscall
+ * msg: "Hello from user mode!\n"
+ */
+static const uint8_t user_hello_code[] = {
+    0x48, 0x8d, 0x35, 0x17, 0x00, 0x00, 0x00,   /* 0:  lea rsi, [rip+23] */
+    0xbf, 0x01, 0x00, 0x00, 0x00,               /* 7:  mov edi, 1 */
+    0xba, 0x16, 0x00, 0x00, 0x00,               /* 12: mov edx, 22 */
+    0xb8, 0x01, 0x00, 0x00, 0x00,               /* 17: mov eax, 1 */
+    0x0f, 0x05,                                 /* 22: syscall */
+    0x31, 0xff,                                 /* 24: xor edi, edi */
+    0x31, 0xc0,                                 /* 26: xor eax, eax */
+    0x0f, 0x05,                                 /* 28: syscall */
+    'H','e','l','l','o',' ','f','r','o','m',' ',
+    'u','s','e','r',' ','m','o','d','e','!','\n'
+};
+
+/*
+ * user_yield_code1: prints "U1 " three times with yields, then exits
+ *
+ * Assembly (48 bytes code + 3 bytes message = 51 bytes total):
+ *   mov r12d, 3          ; loop counter
+ * loop:
+ *   lea rsi, [rip+35]    ; message at offset 48, rip after lea = 13
+ *   mov edi, 1
+ *   mov edx, 3
+ *   mov eax, 1           ; SYS_write
+ *   syscall
+ *   mov eax, 2           ; SYS_yield
+ *   syscall
+ *   dec r12d
+ *   jnz loop
+ *   xor edi, edi
+ *   xor eax, eax         ; SYS_exit
+ *   syscall
+ * msg: "U1 "
+ */
+static const uint8_t user_yield_code1[] = {
+    0x41, 0xbc, 0x03, 0x00, 0x00, 0x00,         /* 0:  mov r12d, 3 */
+    0x48, 0x8d, 0x35, 0x23, 0x00, 0x00, 0x00,   /* 6:  lea rsi, [rip+35] */
+    0xbf, 0x01, 0x00, 0x00, 0x00,               /* 13: mov edi, 1 */
+    0xba, 0x03, 0x00, 0x00, 0x00,               /* 18: mov edx, 3 */
+    0xb8, 0x01, 0x00, 0x00, 0x00,               /* 23: mov eax, 1 */
+    0x0f, 0x05,                                 /* 28: syscall */
+    0xb8, 0x02, 0x00, 0x00, 0x00,               /* 30: mov eax, 2 */
+    0x0f, 0x05,                                 /* 35: syscall */
+    0x41, 0xff, 0xcc,                           /* 37: dec r12d */
+    0x75, 0xdf,                                 /* 40: jnz -33 (to offset 6) */
+    0x31, 0xff,                                 /* 42: xor edi, edi */
+    0x31, 0xc0,                                 /* 44: xor eax, eax */
+    0x0f, 0x05,                                 /* 46: syscall */
+    'U', '1', ' '
+};
+
+/* user_yield_code2: same structure, prints "U2 " */
+static const uint8_t user_yield_code2[] = {
+    0x41, 0xbc, 0x03, 0x00, 0x00, 0x00,
+    0x48, 0x8d, 0x35, 0x23, 0x00, 0x00, 0x00,
+    0xbf, 0x01, 0x00, 0x00, 0x00,
+    0xba, 0x03, 0x00, 0x00, 0x00,
+    0xb8, 0x01, 0x00, 0x00, 0x00,
+    0x0f, 0x05,
+    0xb8, 0x02, 0x00, 0x00, 0x00,
+    0x0f, 0x05,
+    0x41, 0xff, 0xcc,
+    0x75, 0xdf,
+    0x31, 0xff,
+    0x31, 0xc0,
+    0x0f, 0x05,
+    'U', '2', ' '
+};
+
+/* user_fault_code: triggers invalid opcode (ud2) - 2 bytes */
+static const uint8_t user_fault_code[] = {
+    0x0f, 0x0b
+};
+
 void kmain(void) {
     serial_init();
     serial_puts("cool-os: kernel loaded\n");
@@ -134,6 +235,9 @@ void kmain(void) {
     serial_puts("HHDM offset: ");
     print_hex(hhdm_offset);
     serial_puts("\n");
+
+    /* Initialize GDT with user segments and TSS (must be before IDT) */
+    gdt_init();
 
     /* Initialize IDT and exception handlers */
     idt_init();
@@ -181,6 +285,9 @@ void kmain(void) {
 
     /* Initialize heap allocator */
     heap_init();
+
+    /* Initialize SYSCALL/SYSRET mechanism */
+    syscall_init();
 
     /* Heap validation test 1: Basic alloc/free */
     serial_puts("HEAP: Running basic allocation test...\n");
@@ -310,6 +417,42 @@ void kmain(void) {
 
     /* Test 3: Idle fallback */
     serial_puts("PROTO6 TEST3: Idle fallback - entering idle\n");
+
+    /* Proto 7 validation tests */
+
+    /* Make kernel pages user-accessible for user mode execution */
+    serial_puts("PAGING: Making kernel pages user-accessible\n");
+    paging_set_user_accessible((uint64_t)__kernel_start, (uint64_t)__kernel_end);
+
+    /* Test 1: Hello from user mode */
+    serial_puts("PROTO7 TEST1: Hello from user mode\n");
+    task_t *user_task1 = task_create_user(user_hello);
+    scheduler_add(user_task1);
+    while (user_task1->state != TASK_FINISHED) {
+        task_yield();
+    }
+    serial_puts("PROTO7 TEST1: Complete\n");
+
+    /* Test 2: User yield test (two user tasks alternating) */
+    serial_puts("PROTO7 TEST2: User yield test\n");
+    task_t *u1 = task_create_user(user_yield_task1);
+    task_t *u2 = task_create_user(user_yield_task2);
+    scheduler_add(u1);
+    scheduler_add(u2);
+    while (u1->state != TASK_FINISHED || u2->state != TASK_FINISHED) {
+        task_yield();
+    }
+    serial_puts("\nPROTO7 TEST2: Complete\n");
+
+    /* Test 3: Fault isolation (user fault doesn't crash kernel) */
+    serial_puts("PROTO7 TEST3: Fault isolation\n");
+    task_t *fault_task = task_create_user(user_fault_test);
+    scheduler_add(fault_task);
+    while (fault_task->state != TASK_FINISHED) {
+        task_yield();
+    }
+    serial_puts("PROTO7 TEST3: Kernel survived\n");
+
     serial_puts("cool-os: entering idle loop\n");
     for (;;) {
         asm volatile("hlt");

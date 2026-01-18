@@ -14,6 +14,7 @@ PHDRS
 SECTIONS
 {
     . = 0xFFFFFFFF80000000;
+    __kernel_start = .;
 
     .limine_requests : {
         KEEP(*(.limine_requests_start))
@@ -41,6 +42,9 @@ SECTIONS
         *(COMMON)
         *(.bss .bss.*)
     } :data
+
+    . = ALIGN(4096);
+    __kernel_end = .;
 
     /DISCARD/ : {
         *(.comment)

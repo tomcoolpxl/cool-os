@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define IDT_ENTRIES 256
-#define KERNEL_CS   0x28
+#define KERNEL_CS   0x08  /* Must match gdt.h */
 
 /* Type attributes for IDT gates */
 #define IDT_TYPE_INTERRUPT_GATE 0x8E  /* P=1, DPL=0, Type=0xE (64-bit interrupt gate) */

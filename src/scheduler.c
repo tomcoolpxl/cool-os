@@ -5,6 +5,7 @@
 #include "heap.h"
 #include "panic.h"
 #include "serial.h"
+#include "gdt.h"
 
 /* External: current_task is defined in task.c */
 extern task_t *current_task;
@@ -39,6 +40,12 @@ void scheduler_init(void) {
     bootstrap->stack_base = NULL;  /* Using Limine-provided stack */
     bootstrap->id = 0;
     bootstrap->entry = NULL;
+    /* Initialize user mode fields (bootstrap is kernel task) */
+    bootstrap->user_rsp = 0;
+    bootstrap->kernel_rsp = 0;
+    bootstrap->user_rip = 0;
+    bootstrap->is_user = 0;
+    bootstrap->user_stack_base = NULL;
 
     current_task = bootstrap;
 
@@ -104,6 +111,10 @@ void scheduler_yield(void) {
 
     /* Perform context switch if switching to different task */
     if (old != next) {
+        /* Set TSS RSP0 for user task interrupt handling */
+        if (next->is_user && next->kernel_rsp) {
+            tss_set_rsp0(next->kernel_rsp);
+        }
         context_switch(old, next);
     }
 
