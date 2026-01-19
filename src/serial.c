@@ -28,3 +28,58 @@ void serial_puts(const char *s) {
         serial_putc(*s++);
     }
 }
+
+/* Helper to reverse a string */
+static void str_reverse(char *str, int length) {
+    int start = 0;
+    int end = length - 1;
+    while (start < end) {
+        char temp = str[start];
+        str[start] = str[end];
+        str[end] = temp;
+        start++;
+        end--;
+    }
+}
+
+void serial_print_dec(uint64_t val) {
+    char buf[21];
+    int i = 0;
+
+    if (val == 0) {
+        serial_putc('0');
+        return;
+    }
+
+    while (val > 0) {
+        buf[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    
+    buf[i] = '\0';
+    str_reverse(buf, i);
+    serial_puts(buf);
+}
+
+void serial_print_hex(uint64_t val) {
+    char buf[17];
+    const char *hex_chars = "0123456789abcdef";
+    int i = 0;
+
+    serial_puts("0x");
+
+    if (val == 0) {
+        serial_putc('0');
+        return;
+    }
+
+    while (val > 0) {
+        buf[i++] = hex_chars[val % 16];
+        val /= 16;
+    }
+
+    buf[i] = '\0';
+    str_reverse(buf, i);
+    serial_puts(buf);
+}
+

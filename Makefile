@@ -1,99 +1,169 @@
-# cool-os Proto 1 Build System
+# cool-os Unified Build System
+#
+# This Makefile handles three build flavors:
+# - debug (default): For development, with -O2 and debug symbols.
+# - release: For production, with -O3 and stripped symbols.
+# - test: For testing, with test code included and debug-friendly optimization.
+#
+# Targets:
+# - make [all]: Build the default (debug) flavor.
+# - make release: Build the release flavor.
+# - make test: Build the test flavor.
+# - make run: Run the default flavor in QEMU.
+# - make run-release: Run the release flavor in QEMU.
+# - make run-test: Run the test flavor in QEMU.
+# - make image: Create a bootable USB image from the release build.
+# - make clean: Remove all build artifacts.
 
+# --- 1. Configuration ---
+
+# Default flavor if not specified
+FLAVOR ?= debug
+
+# Tools
 CC := gcc
 AS := gcc
 LD := ld
+STRIP := strip
 
-CFLAGS := -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone \
-          -mno-sse -mno-sse2 -mcmodel=kernel -Wall -Wextra -O2 \
-          -I include
+# Source files
+C_SRCS := $(wildcard src/*.c)
+ASM_SRCS := $(wildcard src/*.S)
+TEST_C_SRCS := $(wildcard tests/*.c)
+USER_SRCS := $(wildcard user/*.S)
 
-ASFLAGS := -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel
+# Build directories
+BUILD_DIR := build
+OBJ_DIR := $(BUILD_DIR)/obj/$(FLAVOR)
+USER_OBJ_DIR := $(BUILD_DIR)/user_obj
+DIST_DIR := $(BUILD_DIR)/dist
 
-LDFLAGS := -nostdlib -static -T linker.ld
+# Output files
+KERNEL_ELF := $(DIST_DIR)/kernel-$(FLAVOR).elf
+OS_IMG := $(DIST_DIR)/cool-os-$(FLAVOR).img
+USER_ELFS := $(patsubst user/%.S,$(DIST_DIR)/user/%.elf,$(USER_SRCS))
 
-OVMF_CODE := /usr/share/edk2/x64/OVMF_CODE.4m.fd
-OVMF_VARS := /usr/share/edk2/x64/OVMF_VARS.4m.fd
+# --- 2. Build Flavors ---
 
-LIMINE_VERSION := 8.6.0
-LIMINE_URL := https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/BOOTX64.EFI
+# Base flags
+CFLAGS_BASE := -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone \
+               -mno-sse -mno-sse2 -mcmodel=kernel -Wall -Wextra -I include
+ASFLAGS_BASE := -ffreestanding -fno-pic -mno-red-zone
+LDFLAGS_BASE := -nostdlib -static -T linker.ld
 
-C_SRCS := src/kernel.c src/serial.c src/gdt.c src/idt.c src/isr.c src/pmm.c src/heap.c src/pic.c src/pit.c src/timer.c src/task.c src/scheduler.c src/syscall.c src/paging.c src/elf.c src/block.c src/fat32.c src/vfs.c src/framebuffer.c src/console.c src/kbd.c
-ASM_SRCS := src/isr_stubs.S src/context_switch.S src/syscall_entry.S
-C_OBJS := $(C_SRCS:src/%.c=build/%.o)
-ASM_OBJS := $(ASM_SRCS:src/%.S=build/%.o)
+# Per-flavor flags
+ifeq ($(FLAVOR),release)
+	CFLAGS := $(CFLAGS_BASE) -O3
+	ASFLAGS := $(ASFLAGS_BASE)
+	LDFLAGS := $(LDFLAGS_BASE)
+else ifeq ($(FLAVOR),test)
+	CFLAGS := $(CFLAGS_BASE) -Og -g -DTEST_BUILD
+	ASFLAGS := $(ASFLAGS_BASE) -g
+	LDFLAGS := $(LDFLAGS_BASE)
+else # debug
+	CFLAGS := $(CFLAGS_BASE) -O2 -g -DDEBUG
+	ASFLAGS := $(ASFLAGS_BASE) -g
+	LDFLAGS := $(LDFLAGS_BASE)
+endif
+
+# Object file lists
+C_OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(C_SRCS))
+ASM_OBJS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(ASM_SRCS))
+TEST_OBJS := $(patsubst tests/%.c,$(OBJ_DIR)/%.o,$(TEST_C_SRCS))
+USER_OBJS := $(patsubst user/%.S,$(USER_OBJ_DIR)/%.o,$(USER_SRCS))
+
 OBJS := $(C_OBJS) $(ASM_OBJS)
+ifeq ($(FLAVOR),test)
+	OBJS += $(TEST_OBJS)
+endif
 
-# User programs
-USER_SRCS := user/init.S user/yield1.S user/yield2.S user/fault.S
-USER_ELFS := $(USER_SRCS:user/%.S=build/user/%.elf)
+# --- 3. Main Targets ---
 
-.PHONY: all clean run limine test-ud test-pf user
+.PHONY: all clean debug release test run run-release run-test image limine-deps
 
-all: build/kernel.elf $(USER_ELFS)
+all: $(OS_IMG)
 
-user: $(USER_ELFS)
+# Flavor-switching targets
+debug:
+	@$(MAKE) FLAVOR=debug all
+release:
+	@$(MAKE) FLAVOR=release all
+test:
+	@$(MAKE) FLAVOR=test all
 
-build/kernel.elf: $(OBJS) linker.ld
+# --- 4. Build Rules ---
+
+# Kernel ELF
+$(KERNEL_ELF): $(OBJS) linker.ld
+	@mkdir -p $(DIST_DIR)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
+ifeq ($(FLAVOR),release)
+	$(STRIP) --strip-all $@
+endif
 
-build/%.o: src/%.c
-	@mkdir -p build
+# Kernel objects
+$(OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/%.o: src/%.S
-	@mkdir -p build
+$(OBJ_DIR)/%.o: src/%.S
+	@mkdir -p $(OBJ_DIR)
 	$(AS) $(ASFLAGS) -c $< -o $@
 
-# User program build rules
-build/user/%.o: user/%.S
-	@mkdir -p build/user
-	$(AS) -ffreestanding -fno-pic -c $< -o $@
+$(OBJ_DIR)/%.o: tests/%.c
+	@mkdir -p $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-build/user/%.elf: build/user/%.o user/user.ld
+# User programs
+$(DIST_DIR)/user/%.elf: $(USER_OBJ_DIR)/%.o user/user.ld
+	@mkdir -p $(DIST_DIR)/user
 	$(LD) -nostdlib -static -T user/user.ld -o $@ $<
 
-limine: build/BOOTX64.EFI include/limine.h
+$(USER_OBJ_DIR)/%.o: user/%.S
+	@mkdir -p $(USER_OBJ_DIR)
+	$(AS) -ffreestanding -fno-pic -c $< -o $@
 
-build/BOOTX64.EFI:
-	@mkdir -p build
+# --- 5. Image and QEMU ---
+
+LIMINE_EFI := $(BUILD_DIR)/BOOTX64.EFI
+LIMINE_URL := https://github.com/limine-bootloader/limine/raw/v8.6.0-binary/BOOTX64.EFI
+
+limine-deps: $(LIMINE_EFI)
+
+$(LIMINE_EFI):
+	@mkdir -p $(BUILD_DIR)
 	curl -L -o $@ $(LIMINE_URL)
 
-include/limine.h:
-	@mkdir -p include
-	curl -L -o $@ https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/limine.h
-
-# Data disk image with user programs (for Proto 9 disk-based loading)
-build/data.img: $(USER_ELFS)
-	@mkdir -p build
-	dd if=/dev/zero of=$@ bs=1M count=4
-	mkfs.fat -F 32 $@
-	mcopy -i $@ build/user/init.elf ::INIT.ELF
-	mcopy -i $@ build/user/yield1.elf ::YIELD1.ELF
-	mcopy -i $@ build/user/yield2.elf ::YIELD2.ELF
-	mcopy -i $@ build/user/fault.elf ::FAULT.ELF
-
-esp.img: build/esp.img
-
-build/esp.img: build/kernel.elf build/BOOTX64.EFI limine.conf $(USER_ELFS)
-	@mkdir -p build
+# Unified OS Image
+$(OS_IMG): $(KERNEL_ELF) $(USER_ELFS) limine.conf limine-deps
+	@mkdir -p $(DIST_DIR)
 	dd if=/dev/zero of=$@ bs=1M count=64
 	mkfs.fat -F 32 $@
 	mmd -i $@ ::/EFI
 	mmd -i $@ ::/EFI/BOOT
-	mcopy -i $@ build/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $@ $(LIMINE_EFI) ::/EFI/BOOT/BOOTX64.EFI
 	mcopy -i $@ limine.conf ::/limine.conf
-	mcopy -i $@ build/kernel.elf ::/kernel.elf
-	mcopy -i $@ build/user/init.elf ::/init.elf
-	mcopy -i $@ build/user/yield1.elf ::/yield1.elf
-	mcopy -i $@ build/user/yield2.elf ::/yield2.elf
-	mcopy -i $@ build/user/fault.elf ::/fault.elf
+	mcopy -i $@ $(KERNEL_ELF) ::/kernel.elf
+	@for user_elf in $(USER_ELFS); do \
+		mcopy -i $@ $$user_elf ::/`basename $$user_elf`; \
+	done
 
-build/OVMF_VARS.4m.fd: $(OVMF_VARS)
-	@mkdir -p build
-	cp $(OVMF_VARS) $@
+# QEMU run targets
+OVMF_CODE := /usr/share/edk2/x64/OVMF_CODE.4m.fd
+OVMF_VARS := $(BUILD_DIR)/OVMF_VARS.4m.fd
 
-run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
+run:
+	@$(MAKE) FLAVOR=debug run-qemu
+
+run-release:
+	@$(MAKE) FLAVOR=release run-qemu
+
+run-test:
+	@$(MAKE) FLAVOR=test run-qemu
+
+.PHONY: run-qemu
+run-qemu: all
+	@if [ ! -f "$(OVMF_VARS)" ]; then cp /usr/share/edk2/x64/OVMF_VARS.4m.fd $(OVMF_VARS); fi
 	qemu-system-x86_64 \
 		-enable-kvm \
 		-cpu host \
@@ -101,37 +171,21 @@ run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 		-no-reboot \
 		-no-shutdown \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive if=pflash,format=raw,file=build/OVMF_VARS.4m.fd \
-		-drive format=raw,file=build/esp.img,if=ide,index=0 \
-		-drive format=raw,file=build/data.img,if=ide,index=1 \
+		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-drive format=raw,file=$(OS_IMG) \
 		-serial stdio \
 		-display gtk
 
-# Test targets: trigger specific exceptions or run specific tests
-test-ud:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_UD" all
-	$(MAKE) run
+# Target to create a production USB image
+image:
+	@$(MAKE) FLAVOR=release all
+	@echo "------------------------------------------------------------"
+	@echo "Build complete. Image is at: $(DIST_DIR)/cool-os-release.img"
+	@echo "To write to a USB stick (e.g., /dev/sdX), run:"
+	@echo "sudo dd if=$(DIST_DIR)/cool-os-release.img of=/dev/sdX bs=4M status=progress && sync"
+	@echo "------------------------------------------------------------"
 
-test-pf:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_PF" all
-	$(MAKE) run
 
-test-graphics:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_GRAPHICS" all
-	$(MAKE) run
-
-test-kbd:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_KBD" all
-	$(MAKE) run
-
+# --- 6. Cleanup ---
 clean:
-	rm -rf build
-
-# Include test sources only for test builds
-ifdef TEST_BUILD
-C_SRCS += tests/kernel_tests.c
-endif
+	rm -rf $(BUILD_DIR)

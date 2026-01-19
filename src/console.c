@@ -438,8 +438,7 @@ static void *memmove(void *dest, const void *src, uint64_t n) {
     return dest;
 }
 
-/* Helper to print decimal number */
-static void console_print_dec(uint32_t val) {
+static void serial_print_dec_local(uint32_t val) {
     char buf[12];
     int i = 11;
     buf[i] = '\0';
@@ -527,13 +526,13 @@ void console_init(void) {
     initialized = 1;
 
     serial_puts("console: Initialized ");
-    console_print_dec(cols);
+    serial_print_dec_local(cols);
     serial_puts("x");
-    console_print_dec(rows);
+    serial_print_dec_local(rows);
     serial_puts(" (");
-    console_print_dec(fb->render_width);
+    serial_print_dec_local(fb->render_width);
     serial_puts("x");
-    console_print_dec(fb->render_height);
+    serial_print_dec_local(fb->render_height);
     serial_puts(")\n");
 }
 
@@ -599,6 +598,61 @@ void console_puts(const char *s) {
     }
     fb_present();
 }
+
+/* Helper to reverse a string */
+static void str_reverse(char *str, int length) {
+    int start = 0;
+    int end = length - 1;
+    while (start < end) {
+        char temp = str[start];
+        str[start] = str[end];
+        str[end] = temp;
+        start++;
+        end--;
+    }
+}
+
+void console_print_dec(uint64_t val) {
+    char buf[21]; // Max 20 digits for a 64-bit number + null terminator
+    int i = 0;
+
+    if (val == 0) {
+        console_putc('0');
+        return;
+    }
+
+    while (val > 0) {
+        buf[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    
+    buf[i] = '\0';
+    str_reverse(buf, i);
+    console_puts(buf);
+}
+
+void console_print_hex(uint64_t val) {
+    char buf[17]; // 16 hex digits + null terminator
+    const char *hex_chars = "0123456789abcdef";
+    int i = 0;
+
+    if (val == 0) {
+        console_puts("0x0");
+        return;
+    }
+
+    console_puts("0x");
+
+    while (val > 0) {
+        buf[i++] = hex_chars[val % 16];
+        val /= 16;
+    }
+
+    buf[i] = '\0';
+    str_reverse(buf, i);
+    console_puts(buf);
+}
+
 
 void console_clear(void) {
     if (!initialized) return;

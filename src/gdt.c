@@ -152,8 +152,6 @@ void gdt_init(void) {
 
     /* Load TSS */
     asm volatile("ltr %0" : : "r"((uint16_t)TSS_SEL));
-
-    serial_puts("GDT: Installed with user segments and TSS\n");
 }
 
 void tss_set_rsp0(uint64_t rsp0) {
