@@ -120,11 +120,22 @@ static void print_hex(uint64_t val) {
 static volatile uint64_t test_global = 0xDEADBEEF;
 
 void panic(const char *msg) {
+    /* Disable interrupts */
+    asm volatile("cli");
+
+    /* Try framebuffer console first */
+    console_clear();
+    console_puts("PANIC: ");
+    console_puts(msg);
+    console_puts("\n");
+
+    /* Also output to serial for debugging */
     serial_puts("PANIC: ");
     serial_puts(msg);
     serial_puts("\n");
+
     for (;;) {
-        asm volatile("cli; hlt");
+        asm volatile("hlt");
     }
 }
 
@@ -351,6 +362,8 @@ void kmain(void) {
     /* Initialize framebuffer */
     if (fb_init() != 0) {
         serial_puts("fb: Initialization failed\n");
+    } else {
+        console_init();
     }
 
     /* Heap validation test 1: Basic alloc/free */
@@ -726,6 +739,54 @@ void kmain(void) {
         serial_puts("PROTO10 TEST4: Complete\n");
 
         serial_puts("\n=== PROTO10 TESTS COMPLETE ===\n");
+    }
+
+    /* Proto 11 validation tests (Framebuffer Text Console) */
+    serial_puts("\n=== PROTO11 TESTS (Text Console) ===\n");
+
+    if (fb_get_info() == NULL) {
+        serial_puts("PROTO11: Framebuffer not initialized, skipping tests\n");
+    } else {
+        /* Test 1: Basic text output */
+        serial_puts("PROTO11 TEST1: Basic text output\n");
+        console_clear();
+        console_puts("Hello from console!\n");
+        timer_sleep_ms(1000);
+        serial_puts("PROTO11 TEST1: Complete\n");
+
+        /* Test 2: Multiple lines and newline handling */
+        serial_puts("PROTO11 TEST2: Multiple lines\n");
+        console_puts("Line 1: The quick brown fox\n");
+        console_puts("Line 2: jumps over the lazy dog\n");
+        console_puts("Line 3: 0123456789\n");
+        console_puts("Line 4: ABCDEFGHIJKLMNOPQRSTUVWXYZ\n");
+        console_puts("Line 5: abcdefghijklmnopqrstuvwxyz\n");
+        timer_sleep_ms(1000);
+        serial_puts("PROTO11 TEST2: Complete\n");
+
+        /* Test 3: Scrolling test - print many lines */
+        serial_puts("PROTO11 TEST3: Scrolling test\n");
+        console_clear();
+        for (int i = 0; i < 60; i++) {
+            console_puts("Scroll test line ");
+            /* Print number manually */
+            if (i >= 10) {
+                console_putc('0' + (i / 10));
+            }
+            console_putc('0' + (i % 10));
+            console_puts("\n");
+        }
+        timer_sleep_ms(2000);
+        serial_puts("PROTO11 TEST3: Complete\n");
+
+        /* Test 4: console_clear() test */
+        serial_puts("PROTO11 TEST4: Clear screen test\n");
+        console_clear();
+        console_puts("Screen cleared! This is the only text.\n");
+        timer_sleep_ms(1000);
+        serial_puts("PROTO11 TEST4: Complete\n");
+
+        serial_puts("\n=== PROTO11 TESTS COMPLETE ===\n");
     }
 
     serial_puts("\ncool-os: entering idle loop\n");

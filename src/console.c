@@ -398,18 +398,41 @@ static const uint8_t font[256][16] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
 };
 
-/* Helper: memmove for overlapping memory regions */
+/* Helper: fast memmove using 64-bit copies where possible */
 static void *memmove(void *dest, const void *src, uint64_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
 
     if (d < s) {
-        for (uint64_t i = 0; i < n; i++) {
+        /* Copy forward - use 64-bit words for bulk */
+        uint64_t *d64 = (uint64_t *)d;
+        const uint64_t *s64 = (const uint64_t *)s;
+        uint64_t words = n / 8;
+        uint64_t rem = n % 8;
+
+        for (uint64_t i = 0; i < words; i++) {
+            d64[i] = s64[i];
+        }
+        /* Copy remaining bytes */
+        d += words * 8;
+        s += words * 8;
+        for (uint64_t i = 0; i < rem; i++) {
             d[i] = s[i];
         }
     } else {
-        for (uint64_t i = n; i > 0; i--) {
-            d[i-1] = s[i-1];
+        /* Copy backward */
+        uint64_t words = n / 8;
+        uint64_t rem = n % 8;
+
+        /* Copy trailing bytes first */
+        for (uint64_t i = 0; i < rem; i++) {
+            d[n - 1 - i] = s[n - 1 - i];
+        }
+        /* Copy 64-bit words backward */
+        uint64_t *d64 = (uint64_t *)d;
+        const uint64_t *s64 = (const uint64_t *)s;
+        for (uint64_t i = words; i > 0; i--) {
+            d64[i - 1] = s64[i - 1];
         }
     }
     return dest;
@@ -459,11 +482,13 @@ static void console_scroll(void) {
     /* Move rows up using memmove (handles overlapping regions) */
     memmove(front, front + scroll_bytes, (total_height - FONT_HEIGHT) * row_bytes);
 
-    /* Clear bottom row */
+    /* Clear bottom row - use 64-bit writes (2 pixels at a time) */
+    uint64_t bg_pair = ((uint64_t)bg_color << 32) | bg_color;
     for (uint32_t y = (rows - 1) * FONT_HEIGHT; y < rows * FONT_HEIGHT; y++) {
-        uint32_t *row_ptr = (uint32_t *)(front + y * row_bytes);
-        for (uint32_t x = 0; x < fb->render_width; x++) {
-            row_ptr[x] = bg_color;
+        uint64_t *row_ptr = (uint64_t *)(front + y * row_bytes);
+        uint32_t pairs = fb->render_width / 2;
+        for (uint32_t x = 0; x < pairs; x++) {
+            row_ptr[x] = bg_pair;
         }
     }
 }
