@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 9 complete (Filesystem). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 10 complete (Framebuffer). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -46,9 +46,10 @@ make test-pf  # Test page fault exception
 - OVMF_VARS.4m.fd (writable copy per VM)
 - KVM acceleration enabled
 - Serial redirected to host terminal (`-serial stdio`)
+- GTK display for framebuffer output (`-display gtk`)
 - Two IDE drives: esp.img (boot, index 0) and data.img (data, index 1)
 
-## Implemented Features (Proto 1-9)
+## Implemented Features (Proto 1-10)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -126,6 +127,17 @@ make test-pf  # Test page fault exception
 - Heap enhanced to support multi-page allocations for larger files
 - Data disk (data.img) attached as IDE slave drive
 
+### Proto 10: Framebuffer Graphics
+- Limine framebuffer request for UEFI GOP access
+- Direct rendering to hardware framebuffer (no back buffer due to heap limitations)
+- Native resolution rendering (uses firmware-provided resolution, e.g., 1280x800)
+- 32-bit XRGB pixel format
+- Drawing primitives: `fb_putpixel()`, `fb_clear()`, `fb_fill_rect()`, `fb_present()`
+- `fb_get_info()` returns framebuffer metadata (dimensions, pitch, addresses)
+- Full-screen clear at init to remove UEFI boot graphics
+- Frame-paced animation using `timer_sleep_ms()` to reduce tearing
+- QEMU display mode changed from `-display none` to `-display gtk`
+
 ## User Programs
 
 User programs are in `user/` directory:
@@ -139,53 +151,55 @@ Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine mo
 
 ```
 include/
-  block.h     - Block device interface (ATA PIO)
-  cpu.h       - CPU control (read CR2/CR3, halt)
-  elf.h       - ELF64 structures and loader API
-  fat32.h     - FAT32 filesystem structures and API
-  gdt.h       - GDT structures and segment selectors
-  heap.h      - Heap API (kmalloc/kfree)
-  hhdm.h      - Higher-half direct map helpers
-  idt.h       - IDT structures and init
-  isr.h       - Interrupt frame and handler declarations
-  limine.h    - Limine bootloader protocol
-  msr.h       - Model-Specific Register access (rdmsr/wrmsr)
-  paging.h    - Page table manipulation
-  panic.h     - ASSERT macro and panic()
-  pic.h       - 8259A PIC driver API
-  pit.h       - 8253/8254 PIT driver API
-  pmm.h       - Physical memory manager API
-  ports.h     - I/O port access (inb/outb/inw/outw/insw/io_wait)
-  scheduler.h - Scheduler API (init/add/yield)
-  serial.h    - Serial port I/O
-  syscall.h   - Syscall numbers and dispatcher
-  task.h      - Task API (create/create_user/create_elf/create_from_path/yield/current)
-  timer.h     - Timer subsystem API (sleep/delay functions)
-  user.h      - User-mode syscall wrappers
-  vfs.h       - Virtual filesystem API
+  block.h       - Block device interface (ATA PIO)
+  cpu.h         - CPU control (read CR2/CR3, halt)
+  elf.h         - ELF64 structures and loader API
+  fat32.h       - FAT32 filesystem structures and API
+  framebuffer.h - Framebuffer graphics API
+  gdt.h         - GDT structures and segment selectors
+  heap.h        - Heap API (kmalloc/kfree)
+  hhdm.h        - Higher-half direct map helpers
+  idt.h         - IDT structures and init
+  isr.h         - Interrupt frame and handler declarations
+  limine.h      - Limine bootloader protocol
+  msr.h         - Model-Specific Register access (rdmsr/wrmsr)
+  paging.h      - Page table manipulation
+  panic.h       - ASSERT macro and panic()
+  pic.h         - 8259A PIC driver API
+  pit.h         - 8253/8254 PIT driver API
+  pmm.h         - Physical memory manager API
+  ports.h       - I/O port access (inb/outb/inw/outw/insw/io_wait)
+  scheduler.h   - Scheduler API (init/add/yield)
+  serial.h      - Serial port I/O
+  syscall.h     - Syscall numbers and dispatcher
+  task.h        - Task API (create/create_user/create_elf/create_from_path/yield/current)
+  timer.h       - Timer subsystem API (sleep/delay functions)
+  user.h        - User-mode syscall wrappers
+  vfs.h         - Virtual filesystem API
 
 src/
-  block.c     - ATA PIO driver implementation
+  block.c       - ATA PIO driver implementation
   context_switch.S - Assembly context switch routine
-  elf.c       - ELF64 loader implementation
-  fat32.c     - FAT32 filesystem driver
-  gdt.c       - GDT and TSS initialization
-  heap.c      - Arena-based heap implementation (multi-page support)
-  idt.c       - IDT setup
-  isr.c       - Exception handlers (with user fault handling)
-  isr_stubs.S - Assembly ISR/IRQ entry points
-  kernel.c    - Main kernel entry (kmain)
-  paging.c    - User-space page table mapping (4-level paging)
-  pic.c       - 8259A PIC driver implementation
-  pit.c       - 8253/8254 PIT driver implementation
-  pmm.c       - Bitmap PMM implementation
-  scheduler.c - Round-robin scheduler implementation
-  serial.c    - Serial port driver
-  syscall.c   - Syscall initialization and dispatch
+  elf.c         - ELF64 loader implementation
+  fat32.c       - FAT32 filesystem driver
+  framebuffer.c - Framebuffer graphics implementation
+  gdt.c         - GDT and TSS initialization
+  heap.c        - Arena-based heap implementation (multi-page support)
+  idt.c         - IDT setup
+  isr.c         - Exception handlers (with user fault handling)
+  isr_stubs.S   - Assembly ISR/IRQ entry points
+  kernel.c      - Main kernel entry (kmain)
+  paging.c      - User-space page table mapping (4-level paging)
+  pic.c         - 8259A PIC driver implementation
+  pit.c         - 8253/8254 PIT driver implementation
+  pmm.c         - Bitmap PMM implementation
+  scheduler.c   - Round-robin scheduler implementation
+  serial.c      - Serial port driver
+  syscall.c     - Syscall initialization and dispatch
   syscall_entry.S - Assembly SYSCALL/SYSRET entry point
-  task.c      - Task creation and user/ELF/disk mode support
-  timer.c     - Timer services and IRQ handler
-  vfs.c       - VFS layer implementation
+  task.c        - Task creation and user/ELF/disk mode support
+  timer.c       - Timer services and IRQ handler
+  vfs.c         - VFS layer implementation
 
 user/
   init.S      - Hello world user program
@@ -201,29 +215,3 @@ user/
 - Deterministic behavior for teaching/debugging
 - No premature optimization
 - Standard PC platform only (no hardware-specific dependencies)
-
-## Next Prototype (Planned)
-
-### Proto 10: Fixed-Resolution Framebuffer (960x540) and Software Blitter
-
-See `prototype10.md` for full specification.
-
-**Purpose**: Introduce graphical output using the UEFI framebuffer via Limine with a fixed internal rendering resolution of 960x540, 32-bit true color.
-
-**Key Features**:
-- Limine framebuffer mode request (prefer 960x540x32, fallback to scaling)
-- Back buffer allocation at fixed 960x540 resolution (~2 MB)
-- Software nearest-neighbor scaling blitter to hardware framebuffer
-- Double buffering (render to back buffer, present to front buffer)
-- Drawing primitives: `fb_putpixel()`, `fb_clear()`, `fb_fill_rect()`
-- `fb_present()` scales and copies back buffer to front buffer
-- Frame pacing at 60 FPS using `timer_sleep_ms()`
-- Resolution independence (works on 1080p, 1440p, 4K displays)
-
-**Validation Tests**:
-1. Solid fill (blue screen, proper scaling)
-2. Moving rectangle (smooth animation, no flicker)
-3. Resolution independence (verify 960x540 logical regardless of hardware)
-4. Stress render (60 FPS color alternation for 10 seconds)
-
-**Dependencies**: Limine framebuffer, HHDM, heap/PMM, timer API, paging

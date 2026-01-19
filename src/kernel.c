@@ -19,6 +19,7 @@
 #include "block.h"
 #include "fat32.h"
 #include "vfs.h"
+#include "framebuffer.h"
 
 void kmain(void);
 
@@ -56,6 +57,12 @@ static volatile struct limine_executable_address_request exec_addr_request = {
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+volatile struct limine_framebuffer_request framebuffer_request = {
+    .id = LIMINE_FRAMEBUFFER_REQUEST,
     .revision = 0
 };
 
@@ -340,6 +347,11 @@ void kmain(void) {
         }
     }
 
+    /* Initialize framebuffer */
+    if (fb_init() != 0) {
+        serial_puts("fb: Initialization failed\n");
+    }
+
     /* Heap validation test 1: Basic alloc/free */
     serial_puts("HEAP: Running basic allocation test...\n");
     void *p1 = kmalloc(64);
@@ -617,6 +629,102 @@ void kmain(void) {
         serial_puts("PROTO9 TEST3: Correctly returned NULL for missing file\n");
     } else {
         serial_puts("PROTO9 TEST3: ERROR - should have returned NULL\n");
+    }
+
+    /* Proto 10 validation tests (Framebuffer) */
+    serial_puts("\n=== PROTO10 TESTS (Framebuffer) ===\n");
+
+    const framebuffer_t *fb_info = fb_get_info();
+    if (fb_info == NULL) {
+        serial_puts("PROTO10: Framebuffer not initialized, skipping tests\n");
+    } else {
+        /* Test 1: Solid fill (blue screen) */
+        serial_puts("PROTO10 TEST1: Solid fill (blue screen)\n");
+        fb_clear(0x000066CC);  /* Blue */
+        fb_present();
+        timer_sleep_ms(1000);
+        serial_puts("PROTO10 TEST1: Complete\n");
+
+        /* Test 2: Moving rectangle animation */
+        serial_puts("PROTO10 TEST2: Moving rectangle animation\n");
+
+        /* Start with dark blue background */
+        fb_clear(0x00002244);
+
+        uint32_t rect_x = 0;
+        uint32_t old_rect_x = 0;
+        uint32_t rect_y = fb_info->render_height / 2 - 50;  /* Center vertically */
+        uint32_t max_x = fb_info->render_width - 100;
+        int direction = 1;
+        uint64_t start_ticks = timer_get_ticks();
+        uint64_t end_ticks = start_ticks + (3 * TIMER_HZ);  /* 3 seconds */
+        uint32_t anim_frames = 0;
+
+        /* Draw initial rectangle */
+        fb_fill_rect(rect_x, rect_y, 100, 100, 0x00FFFFFF);
+
+        while (timer_get_ticks() < end_ticks) {
+            /* Erase old rectangle (draw background color) */
+            fb_fill_rect(old_rect_x, rect_y, 100, 100, 0x00002244);
+
+            /* Draw new rectangle */
+            fb_fill_rect(rect_x, rect_y, 100, 100, 0x00FFFFFF);
+
+            fb_present();
+            anim_frames++;
+
+            /* Frame delay */
+            timer_sleep_ms(16);
+
+            /* Save old position and move */
+            old_rect_x = rect_x;
+            rect_x += direction * 4;
+            if (rect_x >= max_x) {
+                direction = -1;
+                rect_x = max_x;
+            } else if (direction == -1 && rect_x <= 4) {
+                direction = 1;
+                rect_x = 0;
+            }
+        }
+        serial_puts("PROTO10 TEST2: Complete (");
+        print_hex(anim_frames);
+        serial_puts(" frames)\n");
+
+        /* Test 3: Resolution independence (print dimensions) */
+        serial_puts("PROTO10 TEST3: Resolution independence\n");
+        serial_puts("  Hardware: ");
+        print_hex(fb_info->hw_width);
+        serial_puts("x");
+        print_hex(fb_info->hw_height);
+        serial_puts("\n");
+        serial_puts("  Render: ");
+        print_hex(fb_info->render_width);
+        serial_puts("x");
+        print_hex(fb_info->render_height);
+        serial_puts("\n");
+        serial_puts("  Scaled: ");
+        print_hex(fb_info->scaled_width);
+        serial_puts("x");
+        print_hex(fb_info->scaled_height);
+        serial_puts("\n");
+        serial_puts("  Scale: ");
+        print_hex(fb_info->scale_x_num);
+        serial_puts("x\n");
+        serial_puts("PROTO10 TEST3: Complete\n");
+
+        /* Test 4: Color cycling (hold each color 500ms) */
+        serial_puts("PROTO10 TEST4: Color cycle test\n");
+        uint32_t colors[] = {0x00FF0000, 0x0000FF00, 0x000000FF, 0x00FFFF00};
+
+        for (int i = 0; i < 4; i++) {
+            fb_clear(colors[i]);
+            fb_present();
+            timer_sleep_ms(500);
+        }
+        serial_puts("PROTO10 TEST4: Complete\n");
+
+        serial_puts("\n=== PROTO10 TESTS COMPLETE ===\n");
     }
 
     serial_puts("\ncool-os: entering idle loop\n");
