@@ -790,7 +790,7 @@ void kmain(void) {
     serial_puts("PROTO12 TEST1: Raw input echo\n");
     console_clear();
     console_puts("I am coolOS.\n\n");
-    serial_write_string("I am coolOS.\n");
+    serial_puts("I am coolOS.\n");
     console_puts("Type keys, ESC to stop:\n");
         while (1) {
             char c = kbd_getc_blocking();

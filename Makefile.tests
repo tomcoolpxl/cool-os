@@ -1,4 +1,4 @@
-# cool-os Proto 1 Build System
+# cool-os Test Build System
 
 CC := gcc
 AS := gcc
@@ -6,7 +6,7 @@ LD := ld
 
 CFLAGS := -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone \
           -mno-sse -mno-sse2 -mcmodel=kernel -Wall -Wextra -O2 \
-          -I include
+          -I include -DTEST_BUILD
 
 ASFLAGS := -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel
 
@@ -28,7 +28,7 @@ OBJS := $(C_OBJS) $(ASM_OBJS)
 USER_SRCS := user/init.S user/yield1.S user/yield2.S user/fault.S
 USER_ELFS := $(USER_SRCS:user/%.S=build/user/%.elf)
 
-.PHONY: all clean run limine test-ud test-pf user
+.PHONY: all clean run limine test-ud test-pf test-graphics test-kbd user
 
 all: build/kernel.elf $(USER_ELFS)
 
@@ -53,27 +53,9 @@ build/user/%.o: user/%.S
 build/user/%.elf: build/user/%.o user/user.ld
 	$(LD) -nostdlib -static -T user/user.ld -o $@ $<
 
-limine: build/BOOTX64.EFI include/limine.h
-
-build/BOOTX64.EFI:
+build/OVMF_VARS.4m.fd: $(OVMF_VARS)
 	@mkdir -p build
-	curl -L -o $@ $(LIMINE_URL)
-
-include/limine.h:
-	@mkdir -p include
-	curl -L -o $@ https://github.com/limine-bootloader/limine/raw/v$(LIMINE_VERSION)-binary/limine.h
-
-# Data disk image with user programs (for Proto 9 disk-based loading)
-build/data.img: $(USER_ELFS)
-	@mkdir -p build
-	dd if=/dev/zero of=$@ bs=1M count=4
-	mkfs.fat -F 32 $@
-	mcopy -i $@ build/user/init.elf ::INIT.ELF
-	mcopy -i $@ build/user/yield1.elf ::YIELD1.ELF
-	mcopy -i $@ build/user/yield2.elf ::YIELD2.ELF
-	mcopy -i $@ build/user/fault.elf ::FAULT.ELF
-
-esp.img: build/esp.img
+	cp $(OVMF_VARS) $@
 
 build/esp.img: build/kernel.elf build/BOOTX64.EFI limine.conf $(USER_ELFS)
 	@mkdir -p build
@@ -89,10 +71,6 @@ build/esp.img: build/kernel.elf build/BOOTX64.EFI limine.conf $(USER_ELFS)
 	mcopy -i $@ build/user/yield2.elf ::/yield2.elf
 	mcopy -i $@ build/user/fault.elf ::/fault.elf
 
-build/OVMF_VARS.4m.fd: $(OVMF_VARS)
-	@mkdir -p build
-	cp $(OVMF_VARS) $@
-
 run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 	qemu-system-x86_64 \
 		-enable-kvm \
@@ -106,27 +84,6 @@ run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 		-drive format=raw,file=build/data.img,if=ide,index=1 \
 		-serial stdio \
 		-display gtk
-
-# Test targets: trigger specific exceptions or run specific tests
-test-ud:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_UD" all
-	$(MAKE) run
-
-test-pf:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_PF" all
-	$(MAKE) run
-
-test-graphics:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_GRAPHICS" all
-	$(MAKE) run
-
-test-kbd:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_KBD" all
-	$(MAKE) run
 
 clean:
 	rm -rf build

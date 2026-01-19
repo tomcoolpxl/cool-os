@@ -18,13 +18,13 @@ cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary g
 ## Build Commands
 
 ```bash
-make        # Build kernel.elf
-make run    # Build esp.img and launch in QEMU
-make clean  # Remove build artifacts
-make test-ud       # Test invalid opcode exception
-make test-pf       # Test page fault exception
-make test-graphics # Run framebuffer and console tests (Proto 10/11)
-make test-kbd      # Run keyboard input tests (Proto 12)
+make                # Build kernel.elf
+make run            # Build esp.img and launch in QEMU
+make clean          # Remove build artifacts
+make -f Makefile.tests test-ud       # Test invalid opcode exception
+make -f Makefile.tests test-pf       # Test page fault exception
+make -f Makefile.tests test-graphics # Run framebuffer and console tests (Proto 10/11)
+make -f Makefile.tests test-kbd      # Run keyboard input tests (Proto 12)
 ```
 
 ## Build Artifacts
@@ -38,18 +38,13 @@ make test-kbd      # Run keyboard input tests (Proto 12)
 
 ## Toolchain
 
-- GCC with freestanding flags (`-ffreestanding -fno-stack-protector -fno-pic -mno-red-zone -mno-sse -mcmodel=kernel`)
-- GNU ld with custom `linker.ld`
-- NASM-style assembly via GCC
+- Added `utils.h` and `utils.c` for utility functions like `print_hex`.
 
-## QEMU Requirements
+## Makefiles
 
-- OVMF_CODE.4m.fd (read-only UEFI firmware)
-- OVMF_VARS.4m.fd (writable copy per VM)
-- KVM acceleration enabled
-- Serial redirected to host terminal (`-serial stdio`)
-- GTK display for framebuffer output (`-display gtk`)
-- Two IDE drives: esp.img (boot, index 0) and data.img (data, index 1)
+- `Makefile`: Original build system for production and testing.
+- `Makefile.production`: Dedicated production build system excluding tests.
+- `Makefile.tests`: Dedicated test build system including all test targets.
 
 ## Implemented Features (Proto 1-12)
 

@@ -1,4 +1,4 @@
-# cool-os Proto 1 Build System
+# cool-os Production Build System
 
 CC := gcc
 AS := gcc
@@ -28,7 +28,7 @@ OBJS := $(C_OBJS) $(ASM_OBJS)
 USER_SRCS := user/init.S user/yield1.S user/yield2.S user/fault.S
 USER_ELFS := $(USER_SRCS:user/%.S=build/user/%.elf)
 
-.PHONY: all clean run limine test-ud test-pf user
+.PHONY: all clean run limine user
 
 all: build/kernel.elf $(USER_ELFS)
 
@@ -107,31 +107,5 @@ run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 		-serial stdio \
 		-display gtk
 
-# Test targets: trigger specific exceptions or run specific tests
-test-ud:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_UD" all
-	$(MAKE) run
-
-test-pf:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_PF" all
-	$(MAKE) run
-
-test-graphics:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_GRAPHICS" all
-	$(MAKE) run
-
-test-kbd:
-	$(MAKE) clean
-	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_KBD" all
-	$(MAKE) run
-
 clean:
 	rm -rf build
-
-# Include test sources only for test builds
-ifdef TEST_BUILD
-C_SRCS += tests/kernel_tests.c
-endif
