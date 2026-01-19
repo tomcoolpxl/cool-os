@@ -786,10 +786,11 @@ void kmain(void) {
     if (fb_get_info() == NULL) {
         serial_puts("PROTO12: Framebuffer not initialized, skipping tests\n");
     } else {
-        /* Test 1: Raw input echo */
-        serial_puts("PROTO12 TEST1: Raw input echo\n");
-        console_clear();
-        console_puts("Type keys, ESC to stop:\n");
+    /* Test 1: Raw input echo */
+    serial_puts("PROTO12 TEST1: Raw input echo\n");
+    console_clear();
+    console_puts("I am coolOS.\n\n");
+    console_puts("Type keys, ESC to stop:\n");
         while (1) {
             char c = kbd_getc_blocking();
             if (c == 27) break;  /* ESC */
