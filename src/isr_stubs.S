@@ -133,6 +133,9 @@ irq_stub_\vector:
 /* Generate IRQ stub for timer (vector 0x20 = 32) */
 IRQ_STUB 0x20
 
+/* Generate IRQ stub for keyboard (vector 0x21 = 33) */
+IRQ_STUB 0x21
+
 /*
  * Common IRQ stub: save all GPRs, call C handler, restore and iretq
  *

@@ -10,5 +10,6 @@ void console_init(void);
 void console_putc(char c);
 void console_puts(const char *s);
 void console_clear(void);
+void console_erase_char(void);
 
 #endif

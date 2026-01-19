@@ -50,4 +50,7 @@ extern void isr_stub_default(void);
 /* IRQ stub for timer (vector 0x20) */
 extern void irq_stub_0x20(void);
 
+/* IRQ stub for keyboard (vector 0x21) */
+extern void irq_stub_0x21(void);
+
 #endif

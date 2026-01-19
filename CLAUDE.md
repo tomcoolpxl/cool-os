@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 11 complete (Text Console). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 12 complete (Keyboard Input). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -24,6 +24,7 @@ make clean  # Remove build artifacts
 make test-ud       # Test invalid opcode exception
 make test-pf       # Test page fault exception
 make test-graphics # Run framebuffer and console tests (Proto 10/11)
+make test-kbd      # Run keyboard input tests (Proto 12)
 ```
 
 ## Build Artifacts
@@ -50,7 +51,7 @@ make test-graphics # Run framebuffer and console tests (Proto 10/11)
 - GTK display for framebuffer output (`-display gtk`)
 - Two IDE drives: esp.img (boot, index 0) and data.img (data, index 1)
 
-## Implemented Features (Proto 1-11)
+## Implemented Features (Proto 1-12)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -149,6 +150,17 @@ make test-graphics # Run framebuffer and console tests (Proto 10/11)
 - Panic messages displayed on both console and serial
 - White text on black background (configurable colors internally)
 
+### Proto 12: Keyboard Input
+- PS/2 keyboard driver via i8042 controller (data port 0x60, status port 0x64)
+- IRQ1 handling (vector 0x21) with PIC integration
+- Scancode Set 1 decoding (press/release detection)
+- ASCII translation with shift and caps lock support
+- 256-byte ring buffer for asynchronous input
+- Keyboard API: `kbd_init()`, `kbd_getc_nonblock()`, `kbd_getc_blocking()`, `kbd_readline()`
+- Line editing with backspace support and console echo
+- Blocking input via `hlt` loop (interrupt-driven, no busy-wait)
+- Modifier key tracking: left/right shift, caps lock, ctrl
+
 ## User Programs
 
 User programs are in `user/` directory:
@@ -163,7 +175,7 @@ Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine mo
 ```
 include/
   block.h       - Block device interface (ATA PIO)
-  console.h     - Text console API
+  console.h     - Text console API (putc/puts/clear/erase_char)
   cpu.h         - CPU control (read CR2/CR3, halt)
   elf.h         - ELF64 structures and loader API
   fat32.h       - FAT32 filesystem structures and API
@@ -173,6 +185,7 @@ include/
   hhdm.h        - Higher-half direct map helpers
   idt.h         - IDT structures and init
   isr.h         - Interrupt frame and handler declarations
+  kbd.h         - PS/2 keyboard driver API
   limine.h      - Limine bootloader protocol
   msr.h         - Model-Specific Register access (rdmsr/wrmsr)
   paging.h      - Page table manipulation
@@ -200,7 +213,8 @@ src/
   heap.c        - Arena-based heap (contiguous multi-page support)
   idt.c         - IDT setup
   isr.c         - Exception handlers (with user fault handling)
-  isr_stubs.S   - Assembly ISR/IRQ entry points
+  isr_stubs.S   - Assembly ISR/IRQ entry points (vectors 0-31, 0x20, 0x21)
+  kbd.c         - PS/2 keyboard driver with scancode translation
   kernel.c      - Main kernel entry (kmain)
   paging.c      - User-space page table mapping (4-level paging)
   pic.c         - 8259A PIC driver implementation
@@ -211,7 +225,7 @@ src/
   syscall.c     - Syscall initialization and dispatch
   syscall_entry.S - Assembly SYSCALL/SYSRET entry point
   task.c        - Task creation and user/ELF/disk mode support
-  timer.c       - Timer services and IRQ handler
+  timer.c       - Timer services and IRQ dispatcher (timer + keyboard)
   vfs.c         - VFS layer implementation
 
 user/

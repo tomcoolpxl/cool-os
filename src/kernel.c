@@ -21,6 +21,7 @@
 #include "vfs.h"
 #include "framebuffer.h"
 #include "console.h"
+#include "kbd.h"
 
 void kmain(void);
 
@@ -461,6 +462,9 @@ void kmain(void) {
     pit_init(100);
     timer_init();
 
+    /* Initialize keyboard driver (after PIC so IRQ1 unmask works) */
+    kbd_init();
+
     /* Initialize scheduler (before enabling interrupts) */
     scheduler_init();
 
@@ -774,6 +778,52 @@ void kmain(void) {
         serial_puts("\n=== PROTO11 TESTS COMPLETE ===\n");
     }
 #endif /* TEST_GRAPHICS */
+
+#ifdef TEST_KBD
+    /* Proto 12 validation tests (Keyboard Input) */
+    serial_puts("\n=== PROTO12 TESTS (Keyboard Input) ===\n");
+
+    if (fb_get_info() == NULL) {
+        serial_puts("PROTO12: Framebuffer not initialized, skipping tests\n");
+    } else {
+        /* Test 1: Raw input echo */
+        serial_puts("PROTO12 TEST1: Raw input echo\n");
+        console_clear();
+        console_puts("Type keys, ESC to stop:\n");
+        while (1) {
+            char c = kbd_getc_blocking();
+            if (c == 27) break;  /* ESC */
+            console_putc(c);
+            fb_present();
+        }
+        console_puts("\n");
+        serial_puts("PROTO12 TEST1: Complete\n");
+
+        /* Test 2: Line input */
+        serial_puts("PROTO12 TEST2: Line input\n");
+        char name[64];
+        console_puts("Enter your name: ");
+        kbd_readline(name, 64);
+        console_puts("Hello, ");
+        console_puts(name);
+        console_puts("!\n");
+        serial_puts("PROTO12 TEST2: Complete\n");
+
+        /* Test 3: Modifier keys */
+        serial_puts("PROTO12 TEST3: Modifier keys\n");
+        console_puts("Test shift/caps with 'aA1!' - ESC to stop:\n");
+        while (1) {
+            char c = kbd_getc_blocking();
+            if (c == 27) break;  /* ESC */
+            console_putc(c);
+            fb_present();
+        }
+        console_puts("\n");
+        serial_puts("PROTO12 TEST3: Complete\n");
+
+        serial_puts("\n=== PROTO12 TESTS COMPLETE ===\n");
+    }
+#endif /* TEST_KBD */
 
     serial_puts("\ncool-os: entering idle loop\n");
     for (;;) {

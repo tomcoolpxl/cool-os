@@ -607,3 +607,12 @@ void console_clear(void) {
     cursor_y = 0;
     fb_present();
 }
+
+void console_erase_char(void) {
+    if (!initialized) return;
+    if (cursor_x > 0) {
+        cursor_x--;
+        console_draw_char(cursor_x, cursor_y, ' ');
+        fb_present();
+    }
+}

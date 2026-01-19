@@ -2,8 +2,10 @@
 #include "pit.h"
 #include "pic.h"
 #include "isr.h"
+#include "kbd.h"
 
-#define IRQ_TIMER  0x20
+#define IRQ_TIMER    0x20
+#define IRQ_KEYBOARD 0x21
 
 void timer_init(void) {
     /* Timer is already set up by pic_init() and pit_init() */
@@ -29,11 +31,14 @@ void timer_sleep_ms(uint64_t ms) {
 
 /*
  * IRQ handler called from assembly stub.
- * Currently hardwired to handle timer (vector 0x20) only.
+ * Dispatches to appropriate handler based on vector number.
  */
 void irq_handler(struct interrupt_frame *frame) {
     if (frame->vector == IRQ_TIMER) {
         pit_tick();
         pic_send_eoi(0);  /* IRQ0 = timer */
+    } else if (frame->vector == IRQ_KEYBOARD) {
+        kbd_handle_irq();
+        pic_send_eoi(1);  /* IRQ1 = keyboard */
     }
 }
