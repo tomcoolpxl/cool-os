@@ -12,41 +12,59 @@ A comprehensive development log and feature list can be found in `CLAUDE.md`. Th
 
 ## Building and Running
 
-The project uses a `Makefile`-based build system.
+The project uses a unified `Makefile`-based build system with three build flavors.
 
-### Standard Build
+### Build Flavors
 
-*   **Build the kernel and user programs:**
+*   **debug** (default): Development build with `-O2 -g -DDEBUG`
+*   **release**: Production build with `-O3` and stripped symbols
+*   **test**: Test build with `-Og -g -DTEST_BUILD`, includes `tests/*.c`
+*   **regtest**: Automated test build with `-Og -g -DREGTEST_BUILD`, includes `tests/regtest_suites.c`
+
+### Build Commands
+
+*   **Build the default (debug) flavor:**
     ```bash
-    make all
+    make
     ```
-    Alternatively, just `make`.
+
+*   **Build a specific flavor:**
+    ```bash
+    make release    # Production build
+    make test       # Test build
+    ```
+
+*   **Run automated regression tests (CI-friendly):**
+    ```bash
+    make regtest        # Build and run all tests
+    make regtest-build  # Build only, don't run
+    ```
+    Exit codes: 0 = pass, 1 = fail or timeout
 
 *   **Build and run in QEMU:**
     ```bash
-    make run
+    make run            # Run debug flavor
+    make run-release    # Run release flavor
+    make run-test       # Run test flavor
     ```
-    This command compiles the kernel and user programs, creates the necessary disk images (`esp.img` and `data.img`), and launches the OS in a QEMU virtual machine.
+
+*   **Create a bootable USB image:**
+    ```bash
+    make image
+    ```
+    This creates `build/dist/cool-os-release.img` suitable for writing to a USB stick.
 
 *   **Clean build artifacts:**
     ```bash
     make clean
     ```
 
-### Testing
+### Build Artifacts
 
-The project includes a separate makefile for running tests. Tests are typically enabled by passing a C preprocessor flag during compilation.
-
-*   **Run a specific test (e.g., test page fault exceptions):**
-    ```bash
-    make -f Makefile.tests test-pf
-    ```
-
-*   **Available test targets** (see `Makefile` for a complete list):
-    *   `test-ud`: Test invalid opcode exception.
-    *   `test-pf`: Test page fault exception.
-    *   `test-graphics`: Run framebuffer and console tests.
-    *   `test-kbd`: Run keyboard input tests.
+*   `build/dist/kernel-<flavor>.elf` - Kernel ELF binary
+*   `build/dist/cool-os-<flavor>.img` - Bootable FAT32 image
+*   `build/dist/user/*.elf` - User program ELF files
+*   `build/obj/<flavor>/` - Object files per flavor
 
 ## Development Conventions
 
@@ -64,7 +82,7 @@ The project includes a separate makefile for running tests. Tests are typically 
     *   `kernel.c`: The main kernel entry point (`kmain`).
 *   `include/`: Kernel header files.
 *   `user/`: User-space applications (Assembly).
-*   `tests/`: Kernel tests.
+*   `tests/`: Kernel test suite (`kernel_tests.c`), included in test flavor builds.
 *   `linker.ld`: Kernel linker script, placing the kernel in the higher half (`0xFFFFFFFF80000000`).
 *   `user/user.ld`: User-space linker script, placing programs at `0x400000`.
 *   `limine.conf`: Limine bootloader configuration.
@@ -72,3 +90,22 @@ The project includes a separate makefile for running tests. Tests are typically 
 ### Key Documents
 
 For a much more detailed understanding of the project's features, architecture, and design philosophy, please refer to **`CLAUDE.md`**. This file is the most comprehensive source of information for this repository.
+
+## Automated Regression Testing
+
+The `make regtest` target runs automated tests in QEMU without human intervention, suitable for CI pipelines.
+
+### Features
+- Uses QEMU's `isa-debug-exit` device for programmatic exit codes
+- 60-second timeout (configurable via `REGTEST_TIMEOUT` environment variable)
+- Serial output logged to `build/regtest.log`
+- Tests PMM, heap, tasks, user mode, ELF loading, filesystem, framebuffer, and console
+
+### Usage
+```bash
+make regtest    # Run all tests
+echo $?         # Check exit code (0=pass, 1=fail)
+cat build/regtest.log | grep "\[REGTEST\]"  # View test results
+```
+
+See `CLAUDE.md` for complete documentation.

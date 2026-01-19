@@ -17,34 +17,37 @@ cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary g
 
 ## Build Commands
 
+The unified Makefile supports four build flavors: debug (default), release, test, and regtest.
+
 ```bash
-make                # Build kernel.elf
-make run            # Build esp.img and launch in QEMU
-make clean          # Remove build artifacts
-make -f Makefile.tests test-ud       # Test invalid opcode exception
-make -f Makefile.tests test-pf       # Test page fault exception
-make -f Makefile.tests test-graphics # Run framebuffer and console tests (Proto 10/11)
-make -f Makefile.tests test-kbd      # Run keyboard input tests (Proto 12)
+make                # Build debug flavor (default)
+make release        # Build release flavor (optimized, stripped)
+make test           # Build test flavor (includes tests/*.c)
+make regtest        # Build and run automated regression tests (CI-friendly)
+make regtest-build  # Build regtest flavor without running
+make run            # Build and run debug flavor in QEMU
+make run-release    # Build and run release flavor in QEMU
+make run-test       # Build and run test flavor in QEMU
+make image          # Create bootable USB image from release build
+make clean          # Remove all build artifacts
 ```
+
+Build flavor differences:
+- **debug**: `-O2 -g -DDEBUG` (development)
+- **release**: `-O3`, stripped symbols (production)
+- **test**: `-Og -g -DTEST_BUILD`, includes `tests/*.c` (interactive testing)
+- **regtest**: `-Og -g -DREGTEST_BUILD`, includes `tests/regtest_suites.c` (automated testing)
 
 ## Build Artifacts
 
-- `build/kernel.elf` - ELF64 kernel image
-- `build/esp.img` - FAT32 UEFI bootable partition containing:
+- `build/dist/kernel-<flavor>.elf` - ELF64 kernel image
+- `build/dist/cool-os-<flavor>.img` - FAT32 UEFI bootable image containing:
   - `EFI/BOOT/BOOTX64.EFI` (Limine)
   - `limine.conf`
   - Kernel binary
-- `build/data.img` - FAT32 data disk containing user ELF programs (INIT.ELF, YIELD1.ELF, etc.)
-
-## Toolchain
-
-- Added `utils.h` and `utils.c` for utility functions like `print_hex`.
-
-## Makefiles
-
-- `Makefile`: Original build system for production and testing.
-- `Makefile.production`: Dedicated production build system excluding tests.
-- `Makefile.tests`: Dedicated test build system including all test targets.
+  - User program ELFs
+- `build/dist/user/*.elf` - User program ELF files
+- `build/obj/<flavor>/` - Object files per flavor
 
 ## Implemented Features (Proto 1-12)
 
@@ -189,6 +192,7 @@ include/
   pit.h         - 8253/8254 PIT driver API
   pmm.h         - Physical memory manager API
   ports.h       - I/O port access (inb/outb/inw/outw/insw/io_wait)
+  regtest.h     - Regression test infrastructure API
   scheduler.h   - Scheduler API (init/add/yield)
   serial.h      - Serial port I/O
   syscall.h     - Syscall numbers and dispatcher
@@ -215,6 +219,7 @@ src/
   pic.c         - 8259A PIC driver implementation
   pit.c         - 8253/8254 PIT driver implementation
   pmm.c         - Bitmap PMM with contiguous allocation
+  regtest.c     - Regression test infrastructure implementation
   scheduler.c   - Round-robin scheduler implementation
   serial.c      - Serial port driver
   syscall.c     - Syscall initialization and dispatch
@@ -229,6 +234,13 @@ user/
   yield2.S    - Yield test program 2
   fault.S     - Privilege separation test
   user.ld     - Linker script for user programs
+
+tests/
+  kernel_tests.c   - Interactive test suite (included in test flavor via TEST_BUILD)
+  regtest_suites.c - Automated regression test suites (included in regtest flavor)
+
+scripts/
+  run_regtest.sh - QEMU runner script for regression tests
 ```
 
 ## Design Philosophy
@@ -237,3 +249,69 @@ user/
 - Deterministic behavior for teaching/debugging
 - No premature optimization
 - Standard PC platform only (no hardware-specific dependencies)
+
+## Automated Regression Testing
+
+The `regtest` build flavor provides CI-friendly automated testing that runs in QEMU without human intervention and exits with appropriate exit codes.
+
+### Running Tests
+
+```bash
+make regtest        # Build and run all regression tests
+echo $?             # 0 = pass, 1 = fail
+```
+
+### How It Works
+
+1. **QEMU Exit Mechanism**: Uses `isa-debug-exit` device (port 0x501)
+   - Write `0x00` → QEMU exits with code 1 (tests passed)
+   - Write `0x01` → QEMU exits with code 3 (tests failed)
+
+2. **Test Runner Script**: `scripts/run_regtest.sh`
+   - Runs QEMU with 60-second timeout (configurable via `REGTEST_TIMEOUT`)
+   - Captures serial output to `build/regtest.log`
+   - Parses `[REGTEST]` prefixed output for pass/fail counts
+
+3. **Output Format**:
+   ```
+   [REGTEST] START suite_name
+   [REGTEST] PASS test_name
+   [REGTEST] FAIL test_name: reason
+   [REGTEST] END suite_name passed=N failed=M
+   [REGTEST] SUMMARY total=N passed=P failed=F
+   [REGTEST] EXIT code
+   ```
+
+### Test Suites
+
+| Suite | Description |
+|-------|-------------|
+| `pmm` | Physical Memory Manager: alloc/free, patterns, contiguous |
+| `heap` | Kernel Heap: kmalloc/kfree, coalescing, stress test |
+| `task` | Cooperative Multitasking: create, switch, exit |
+| `user` | User Mode: syscalls, yield, fault isolation |
+| `elf` | ELF Loader: module loading, task creation |
+| `fs` | Filesystem: VFS open/read/seek/close, disk ELF loading |
+| `fb` | Framebuffer: init, dimensions, clear, fill, present |
+| `console` | Text Console: init, putc, puts, scroll |
+
+### Exit Codes
+
+| QEMU Exit | Script Exit | Meaning |
+|-----------|-------------|---------|
+| 1 | 0 | All tests passed |
+| 3 | 1 | One or more tests failed |
+| 124 | 1 | Timeout (hung or infinite loop) |
+| Other | 1 | Unexpected error |
+
+### API (`include/regtest.h`)
+
+```c
+void regtest_exit(int success);           // Exit QEMU with result
+void regtest_log(const char *fmt, ...);   // Log with [REGTEST] prefix
+void regtest_pass(const char *test_name); // Record passing test
+void regtest_fail(const char *test_name, const char *reason); // Record failure
+void regtest_start_suite(const char *suite_name);  // Start suite
+void regtest_end_suite(const char *suite_name);    // End suite
+int regtest_run_all(void);                // Run all enabled suites
+```

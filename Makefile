@@ -1,9 +1,10 @@
 # cool-os Unified Build System
 #
-# This Makefile handles three build flavors:
+# This Makefile handles four build flavors:
 # - debug (default): For development, with -O2 and debug symbols.
 # - release: For production, with -O3 and stripped symbols.
 # - test: For testing, with test code included and debug-friendly optimization.
+# - regtest: For automated regression testing with QEMU exit codes.
 #
 # Targets:
 # - make [all]: Build the default (debug) flavor.
@@ -12,6 +13,8 @@
 # - make run: Run the default flavor in QEMU.
 # - make run-release: Run the release flavor in QEMU.
 # - make run-test: Run the test flavor in QEMU.
+# - make regtest: Build and run automated regression tests.
+# - make regtest-build: Build regtest flavor without running.
 # - make image: Create a bootable USB image from the release build.
 # - make clean: Remove all build artifacts.
 
@@ -57,7 +60,11 @@ ifeq ($(FLAVOR),release)
 	ASFLAGS := $(ASFLAGS_BASE)
 	LDFLAGS := $(LDFLAGS_BASE)
 else ifeq ($(FLAVOR),test)
-	CFLAGS := $(CFLAGS_BASE) -Og -g -DTEST_BUILD
+	CFLAGS := $(CFLAGS_BASE) -Og -g -DTEST_BUILD -DTEST_GRAPHICS -DTEST_KBD
+	ASFLAGS := $(ASFLAGS_BASE) -g
+	LDFLAGS := $(LDFLAGS_BASE)
+else ifeq ($(FLAVOR),regtest)
+	CFLAGS := $(CFLAGS_BASE) -Og -g -DREGTEST_BUILD
 	ASFLAGS := $(ASFLAGS_BASE) -g
 	LDFLAGS := $(LDFLAGS_BASE)
 else # debug
@@ -72,14 +79,21 @@ ASM_OBJS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(ASM_SRCS))
 TEST_OBJS := $(patsubst tests/%.c,$(OBJ_DIR)/%.o,$(TEST_C_SRCS))
 USER_OBJS := $(patsubst user/%.S,$(USER_OBJ_DIR)/%.o,$(USER_SRCS))
 
+# Regtest source files
+REGTEST_C_SRCS := $(wildcard tests/regtest_suites.c)
+REGTEST_OBJS := $(patsubst tests/%.c,$(OBJ_DIR)/%.o,$(REGTEST_C_SRCS))
+
 OBJS := $(C_OBJS) $(ASM_OBJS)
 ifeq ($(FLAVOR),test)
 	OBJS += $(TEST_OBJS)
 endif
+ifeq ($(FLAVOR),regtest)
+	OBJS += $(REGTEST_OBJS)
+endif
 
 # --- 3. Main Targets ---
 
-.PHONY: all clean debug release test run run-release run-test image limine-deps
+.PHONY: all clean debug release test regtest regtest-build run run-release run-test image limine-deps
 
 all: $(OS_IMG)
 
@@ -90,6 +104,13 @@ release:
 	@$(MAKE) FLAVOR=release all
 test:
 	@$(MAKE) FLAVOR=test all
+
+# Regression test targets
+regtest-build:
+	@$(MAKE) FLAVOR=regtest all
+
+regtest: regtest-build
+	@./scripts/run_regtest.sh
 
 # --- 4. Build Rules ---
 

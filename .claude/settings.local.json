@@ -13,7 +13,10 @@
       "Bash(nm:*)",
       "Bash(ls:*)",
       "Bash(grep:*)",
-      "Bash(xargs basename:*)"
+      "Bash(xargs basename:*)",
+      "Bash(chmod:*)",
+      "Bash(./scripts/run_regtest.sh:*)",
+      "Bash(echo:*)"
     ]
   }
 }
