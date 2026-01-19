@@ -20,6 +20,7 @@
 #include "fat32.h"
 #include "vfs.h"
 #include "framebuffer.h"
+#include "console.h"
 
 void kmain(void);
 

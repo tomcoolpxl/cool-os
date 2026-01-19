@@ -12,7 +12,8 @@
       "WebFetch(domain:github.com)",
       "Bash(nm:*)",
       "Bash(ls:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(xargs basename:*)"
     ]
   }
 }
