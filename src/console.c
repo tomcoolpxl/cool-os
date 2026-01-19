@@ -456,15 +456,22 @@ static void console_print_dec(uint32_t val) {
 
 /* Draw a single character glyph at character position (cx, cy) */
 static void console_draw_char(uint32_t cx, uint32_t cy, char c) {
+    const framebuffer_t *fb = fb_get_info();
+    if (fb == NULL) return;
+
     const uint8_t *glyph = font[(uint8_t)c];
     uint32_t px = cx * FONT_WIDTH;
     uint32_t py = cy * FONT_HEIGHT;
 
+    /* Write directly to buffer for speed (avoid 128 function calls) */
+    uint8_t *buffer = (uint8_t *)(fb->back ? fb->back : fb->front);
+    uint32_t pitch = fb->back ? fb->back_pitch : fb->hw_pitch;
+
     for (uint32_t row = 0; row < FONT_HEIGHT; row++) {
         uint8_t bits = glyph[row];
+        uint32_t *row_ptr = (uint32_t *)(buffer + (py + row) * pitch);
         for (uint32_t col = 0; col < FONT_WIDTH; col++) {
-            uint32_t color = (bits & (0x80 >> col)) ? fg_color : bg_color;
-            fb_putpixel(px + col, py + row, color);
+            row_ptr[px + col] = (bits & (0x80 >> col)) ? fg_color : bg_color;
         }
     }
 }
@@ -474,18 +481,20 @@ static void console_scroll(void) {
     const framebuffer_t *fb = fb_get_info();
     if (fb == NULL) return;
 
-    uint8_t *front = (uint8_t *)fb->front;
-    uint32_t row_bytes = fb->hw_pitch;
-    uint32_t scroll_bytes = FONT_HEIGHT * row_bytes;
+    /* Use back buffer if available (fast RAM), otherwise front (slow VRAM) */
+    uint8_t *buffer = (uint8_t *)(fb->back ? fb->back : fb->front);
+    uint32_t pitch = fb->back ? fb->back_pitch : fb->hw_pitch;
+
+    uint32_t scroll_bytes = FONT_HEIGHT * pitch;
     uint32_t total_height = rows * FONT_HEIGHT;
 
     /* Move rows up using memmove (handles overlapping regions) */
-    memmove(front, front + scroll_bytes, (total_height - FONT_HEIGHT) * row_bytes);
+    memmove(buffer, buffer + scroll_bytes, (total_height - FONT_HEIGHT) * pitch);
 
     /* Clear bottom row - use 64-bit writes (2 pixels at a time) */
     uint64_t bg_pair = ((uint64_t)bg_color << 32) | bg_color;
     for (uint32_t y = (rows - 1) * FONT_HEIGHT; y < rows * FONT_HEIGHT; y++) {
-        uint64_t *row_ptr = (uint64_t *)(front + y * row_bytes);
+        uint64_t *row_ptr = (uint64_t *)(buffer + y * pitch);
         uint32_t pairs = fb->render_width / 2;
         for (uint32_t x = 0; x < pairs; x++) {
             row_ptr[x] = bg_pair;
@@ -588,6 +597,7 @@ void console_puts(const char *s) {
     while (*s) {
         console_putc(*s++);
     }
+    fb_present();
 }
 
 void console_clear(void) {
@@ -595,4 +605,5 @@ void console_clear(void) {
     fb_clear(bg_color);
     cursor_x = 0;
     cursor_y = 0;
+    fb_present();
 }

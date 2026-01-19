@@ -81,8 +81,21 @@ int fb_init(void) {
     fb.render_width = fb.hw_width;
     fb.render_height = fb.hw_height;
 
-    /* Use front buffer directly (no double buffering) */
-    fb.back = NULL;
+    /* Allocate back buffer in regular RAM for fast operations */
+    fb.back_pitch = fb.render_width * 4;  /* Tightly packed */
+    uint64_t back_size = (uint64_t)fb.back_pitch * fb.render_height;
+    fb.back = kmalloc(back_size);
+    if (fb.back == NULL) {
+        serial_puts("fb: Failed to allocate back buffer (");
+        fb_print_dec((uint32_t)(back_size / 1024));
+        serial_puts(" KB), using direct mode\n");
+    } else {
+        serial_puts("fb: Allocated back buffer (");
+        fb_print_dec((uint32_t)(back_size / 1024));
+        serial_puts(" KB) at ");
+        fb_print_hex((uint64_t)fb.back);
+        serial_puts("\n");
+    }
 
     /* No scaling needed - render at native resolution */
     fb.scaled_width = fb.hw_width;
@@ -111,22 +124,17 @@ int fb_init(void) {
     fb_print_dec(fb.render_width);
     serial_puts("x");
     fb_print_dec(fb.render_height);
-    serial_puts(" (direct, no scaling)\n");
+    serial_puts(fb.back ? " (double-buffered)\n" : " (direct mode)\n");
 
     serial_puts("fb: Front buffer at ");
     fb_print_hex((uint64_t)fb.front);
     serial_puts("\n");
 
-    /* Clear entire hardware framebuffer to black */
-    uint8_t *front = (uint8_t *)fb.front;
-    for (uint32_t y = 0; y < fb.hw_height; y++) {
-        uint32_t *row = (uint32_t *)(front + y * fb.hw_pitch);
-        for (uint32_t x = 0; x < fb.hw_width; x++) {
-            row[x] = 0x00000000;
-        }
-    }
+    /* Clear framebuffer to black */
+    fb_clear(0x00000000);
+    fb_present();
 
-    serial_puts("fb: Init complete (direct rendering, no back buffer)\n");
+    serial_puts("fb: Init complete\n");
     return 0;
 }
 
@@ -134,21 +142,28 @@ void fb_putpixel(uint32_t x, uint32_t y, uint32_t color) {
     if (!initialized || x >= fb.render_width || y >= fb.render_height) {
         return;
     }
-    /* Draw directly to front buffer */
-    uint8_t *front = (uint8_t *)fb.front;
-    uint32_t *row = (uint32_t *)(front + y * fb.hw_pitch);
-    row[x] = color;
+    if (fb.back) {
+        uint32_t *row = (uint32_t *)((uint8_t *)fb.back + y * fb.back_pitch);
+        row[x] = color;
+    } else {
+        uint32_t *row = (uint32_t *)((uint8_t *)fb.front + y * fb.hw_pitch);
+        row[x] = color;
+    }
 }
 
 void fb_clear(uint32_t color) {
     if (!initialized) return;
 
-    /* Clear directly on front buffer */
-    uint8_t *front = (uint8_t *)fb.front;
+    void *target = fb.back ? fb.back : fb.front;
+    uint32_t pitch = fb.back ? fb.back_pitch : fb.hw_pitch;
+
+    /* Use 64-bit writes for speed (2 pixels at a time) */
+    uint64_t color_pair = ((uint64_t)color << 32) | color;
     for (uint32_t y = 0; y < fb.render_height; y++) {
-        uint32_t *row = (uint32_t *)(front + y * fb.hw_pitch);
-        for (uint32_t x = 0; x < fb.render_width; x++) {
-            row[x] = color;
+        uint64_t *row = (uint64_t *)((uint8_t *)target + y * pitch);
+        uint32_t pairs = fb.render_width / 2;
+        for (uint32_t x = 0; x < pairs; x++) {
+            row[x] = color_pair;
         }
     }
 }
@@ -161,10 +176,11 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color
     if (x + w > fb.render_width) w = fb.render_width - x;
     if (y + h > fb.render_height) h = fb.render_height - y;
 
-    /* Draw directly to front buffer */
-    uint8_t *front = (uint8_t *)fb.front;
+    void *target = fb.back ? fb.back : fb.front;
+    uint32_t pitch = fb.back ? fb.back_pitch : fb.hw_pitch;
+
     for (uint32_t dy = 0; dy < h; dy++) {
-        uint32_t *row = (uint32_t *)(front + (y + dy) * fb.hw_pitch);
+        uint32_t *row = (uint32_t *)((uint8_t *)target + (y + dy) * pitch);
         for (uint32_t dx = 0; dx < w; dx++) {
             row[x + dx] = color;
         }
@@ -172,8 +188,21 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color
 }
 
 void fb_present(void) {
-    /* No-op: we draw directly to front buffer */
-    (void)0;
+    if (!initialized || !fb.back) return;
+
+    uint8_t *src = (uint8_t *)fb.back;
+    uint8_t *dst = (uint8_t *)fb.front;
+    uint32_t row_bytes = fb.render_width * 4;
+
+    /* Copy row by row using 64-bit transfers */
+    for (uint32_t y = 0; y < fb.render_height; y++) {
+        uint64_t *s = (uint64_t *)(src + y * fb.back_pitch);
+        uint64_t *d = (uint64_t *)(dst + y * fb.hw_pitch);
+        uint32_t words = row_bytes / 8;
+        for (uint32_t i = 0; i < words; i++) {
+            d[i] = s[i];
+        }
+    }
 }
 
 const framebuffer_t *fb_get_info(void) {

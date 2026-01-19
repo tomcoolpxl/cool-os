@@ -107,7 +107,7 @@ run: build/esp.img build/data.img build/OVMF_VARS.4m.fd
 		-serial stdio \
 		-display gtk
 
-# Test targets: trigger specific exceptions
+# Test targets: trigger specific exceptions or run specific tests
 test-ud:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_UD" all
@@ -116,6 +116,11 @@ test-ud:
 test-pf:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_PF" all
+	$(MAKE) run
+
+test-graphics:
+	$(MAKE) clean
+	$(MAKE) CFLAGS="$(CFLAGS) -DTEST_GRAPHICS" all
 	$(MAKE) run
 
 clean:

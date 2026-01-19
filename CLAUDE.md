@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
 
-**Current Status:** Proto 10 complete (Framebuffer). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 11 complete (Text Console). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -21,8 +21,9 @@ cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary g
 make        # Build kernel.elf
 make run    # Build esp.img and launch in QEMU
 make clean  # Remove build artifacts
-make test-ud  # Test invalid opcode exception
-make test-pf  # Test page fault exception
+make test-ud       # Test invalid opcode exception
+make test-pf       # Test page fault exception
+make test-graphics # Run framebuffer and console tests (Proto 10/11)
 ```
 
 ## Build Artifacts
@@ -49,7 +50,7 @@ make test-pf  # Test page fault exception
 - GTK display for framebuffer output (`-display gtk`)
 - Two IDE drives: esp.img (boot, index 0) and data.img (data, index 1)
 
-## Implemented Features (Proto 1-10)
+## Implemented Features (Proto 1-11)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -60,6 +61,7 @@ make test-pf  # Test page fault exception
 ### Proto 2: Physical Memory Manager
 - Bitmap-based PMM tracking all physical frames
 - `pmm_alloc_frame()` / `pmm_free_frame()` API
+- `pmm_alloc_frames_contiguous(count)` for multi-page allocations
 - Memory map parsing from Limine
 - Double-free detection via ASSERT
 
@@ -129,14 +131,23 @@ make test-pf  # Test page fault exception
 
 ### Proto 10: Framebuffer Graphics
 - Limine framebuffer request for UEFI GOP access
-- Direct rendering to hardware framebuffer (no back buffer due to heap limitations)
+- Double-buffered rendering (4MB back buffer in RAM, bulk copy to VRAM)
 - Native resolution rendering (uses firmware-provided resolution, e.g., 1280x800)
 - 32-bit XRGB pixel format
 - Drawing primitives: `fb_putpixel()`, `fb_clear()`, `fb_fill_rect()`, `fb_present()`
 - `fb_get_info()` returns framebuffer metadata (dimensions, pitch, addresses)
-- Full-screen clear at init to remove UEFI boot graphics
-- Frame-paced animation using `timer_sleep_ms()` to reduce tearing
+- Graceful fallback to direct rendering if back buffer allocation fails
 - QEMU display mode changed from `-display none` to `-display gtk`
+
+### Proto 11: Text Console
+- Software-rendered text console using framebuffer
+- Embedded 8x16 VGA bitmap font (256 characters, 4KB)
+- Console API: `console_init()`, `console_putc()`, `console_puts()`, `console_clear()`
+- Character grid calculated from framebuffer dimensions (e.g., 160x50 at 1280x800)
+- Automatic scrolling via optimized memmove on back buffer
+- Special character handling: `\n`, `\r`, `\t`, `\b`
+- Panic messages displayed on both console and serial
+- White text on black background (configurable colors internally)
 
 ## User Programs
 
@@ -152,6 +163,7 @@ Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine mo
 ```
 include/
   block.h       - Block device interface (ATA PIO)
+  console.h     - Text console API
   cpu.h         - CPU control (read CR2/CR3, halt)
   elf.h         - ELF64 structures and loader API
   fat32.h       - FAT32 filesystem structures and API
@@ -179,12 +191,13 @@ include/
 
 src/
   block.c       - ATA PIO driver implementation
+  console.c     - Text console with embedded 8x16 font
   context_switch.S - Assembly context switch routine
   elf.c         - ELF64 loader implementation
   fat32.c       - FAT32 filesystem driver
-  framebuffer.c - Framebuffer graphics implementation
+  framebuffer.c - Double-buffered framebuffer graphics
   gdt.c         - GDT and TSS initialization
-  heap.c        - Arena-based heap implementation (multi-page support)
+  heap.c        - Arena-based heap (contiguous multi-page support)
   idt.c         - IDT setup
   isr.c         - Exception handlers (with user fault handling)
   isr_stubs.S   - Assembly ISR/IRQ entry points
@@ -192,7 +205,7 @@ src/
   paging.c      - User-space page table mapping (4-level paging)
   pic.c         - 8259A PIC driver implementation
   pit.c         - 8253/8254 PIT driver implementation
-  pmm.c         - Bitmap PMM implementation
+  pmm.c         - Bitmap PMM with contiguous allocation
   scheduler.c   - Round-robin scheduler implementation
   serial.c      - Serial port driver
   syscall.c     - Syscall initialization and dispatch

@@ -12,6 +12,7 @@ typedef struct {
     void *front;
     uint32_t render_width, render_height;
     void *back;
+    uint32_t back_pitch;
     uint32_t scale_x_num, scale_x_den, scale_y_num, scale_y_den;
     uint32_t offset_x, offset_y, scaled_width, scaled_height;
 } framebuffer_t;

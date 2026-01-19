@@ -47,13 +47,9 @@ static arena_t *heap_expand_size(uint64_t needed_size) {
     if (pages_needed < 1) pages_needed = 1;
 
     /* Allocate contiguous pages */
-    uint64_t first_phys = 0;
-    for (uint64_t i = 0; i < pages_needed; i++) {
-        uint64_t phys = pmm_alloc_frame();
-        if (phys == 0) {
-            return NULL;  /* Out of memory */
-        }
-        if (i == 0) first_phys = phys;
+    uint64_t first_phys = pmm_alloc_frames_contiguous(pages_needed);
+    if (first_phys == 0) {
+        return NULL;  /* Out of memory or no contiguous region */
     }
 
     arena_t *arena = (arena_t *)phys_to_hhdm(first_phys);

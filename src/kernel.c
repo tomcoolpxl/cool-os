@@ -645,6 +645,7 @@ void kmain(void) {
         serial_puts("PROTO9 TEST3: ERROR - should have returned NULL\n");
     }
 
+#ifdef TEST_GRAPHICS
     /* Proto 10 validation tests (Framebuffer) */
     serial_puts("\n=== PROTO10 TESTS (Framebuffer) ===\n");
 
@@ -666,7 +667,6 @@ void kmain(void) {
         fb_clear(0x00002244);
 
         uint32_t rect_x = 0;
-        uint32_t old_rect_x = 0;
         uint32_t rect_y = fb_info->render_height / 2 - 50;  /* Center vertically */
         uint32_t max_x = fb_info->render_width - 100;
         int direction = 1;
@@ -674,29 +674,19 @@ void kmain(void) {
         uint64_t end_ticks = start_ticks + (3 * TIMER_HZ);  /* 3 seconds */
         uint32_t anim_frames = 0;
 
-        /* Draw initial rectangle */
-        fb_fill_rect(rect_x, rect_y, 100, 100, 0x00FFFFFF);
-
         while (timer_get_ticks() < end_ticks) {
-            /* Erase old rectangle (draw background color) */
-            fb_fill_rect(old_rect_x, rect_y, 100, 100, 0x00002244);
-
-            /* Draw new rectangle */
+            /* Clear and redraw (back buffer makes this fast) */
+            fb_clear(0x00002244);
             fb_fill_rect(rect_x, rect_y, 100, 100, 0x00FFFFFF);
-
             fb_present();
             anim_frames++;
 
-            /* Frame delay */
-            timer_sleep_ms(16);
-
-            /* Save old position and move */
-            old_rect_x = rect_x;
-            rect_x += direction * 4;
+            /* Move rectangle */
+            rect_x += direction * 8;
             if (rect_x >= max_x) {
                 direction = -1;
                 rect_x = max_x;
-            } else if (direction == -1 && rect_x <= 4) {
+            } else if (direction == -1 && rect_x <= 8) {
                 direction = 1;
                 rect_x = 0;
             }
@@ -717,14 +707,9 @@ void kmain(void) {
         serial_puts("x");
         print_hex(fb_info->render_height);
         serial_puts("\n");
-        serial_puts("  Scaled: ");
-        print_hex(fb_info->scaled_width);
-        serial_puts("x");
-        print_hex(fb_info->scaled_height);
+        serial_puts("  Back buffer: ");
+        print_hex((uint64_t)fb_info->back);
         serial_puts("\n");
-        serial_puts("  Scale: ");
-        print_hex(fb_info->scale_x_num);
-        serial_puts("x\n");
         serial_puts("PROTO10 TEST3: Complete\n");
 
         /* Test 4: Color cycling (hold each color 500ms) */
@@ -776,7 +761,7 @@ void kmain(void) {
             console_putc('0' + (i % 10));
             console_puts("\n");
         }
-        timer_sleep_ms(2000);
+        timer_sleep_ms(1000);
         serial_puts("PROTO11 TEST3: Complete\n");
 
         /* Test 4: console_clear() test */
@@ -788,6 +773,7 @@ void kmain(void) {
 
         serial_puts("\n=== PROTO11 TESTS COMPLETE ===\n");
     }
+#endif /* TEST_GRAPHICS */
 
     serial_puts("\ncool-os: entering idle loop\n");
     for (;;) {

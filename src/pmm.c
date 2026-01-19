@@ -217,6 +217,40 @@ uint64_t pmm_alloc_frame(void) {
     return 0; /* Unreachable */
 }
 
+uint64_t pmm_alloc_frames_contiguous(uint64_t count) {
+    if (count == 0) return 0;
+    if (count == 1) return pmm_alloc_frame();
+
+    /* Search for 'count' consecutive free frames */
+    uint64_t run_start = 0;
+    uint64_t run_length = 0;
+
+    for (uint64_t frame = 0; frame < pmm_frame_count; frame++) {
+        if (!bitmap_test(frame)) {
+            if (run_length == 0) {
+                run_start = frame;
+            }
+            run_length++;
+            if (run_length == count) {
+                /* Found a run of 'count' free frames - mark them all as used */
+                for (uint64_t i = 0; i < count; i++) {
+                    bitmap_set(run_start + i);
+                    pmm_free_frames--;
+                }
+                uint64_t phys_addr = run_start * PAGE_SIZE;
+                ASSERT(IS_PAGE_ALIGNED(phys_addr));
+                return phys_addr;
+            }
+        } else {
+            /* Frame is used, reset run */
+            run_length = 0;
+        }
+    }
+
+    /* No contiguous region found */
+    return 0;
+}
+
 void pmm_free_frame(uint64_t phys_addr) {
     ASSERT(IS_PAGE_ALIGNED(phys_addr));
     uint64_t frame = phys_addr / PAGE_SIZE;

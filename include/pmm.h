@@ -12,6 +12,7 @@
 
 void pmm_init(void);
 uint64_t pmm_alloc_frame(void);
+uint64_t pmm_alloc_frames_contiguous(uint64_t count);
 void pmm_free_frame(uint64_t phys_addr);
 uint64_t pmm_get_free_frames(void);
 
