@@ -22,6 +22,7 @@
 #include "framebuffer.h"
 #include "console.h"
 #include "kbd.h"
+#include "pci.h"
 
 #ifdef REGTEST_BUILD
 #include "regtest.h"
@@ -323,6 +324,9 @@ void kmain(void) {
     serial_puts("Testing: triggering #PF (page fault)...\n");
     *(volatile uint64_t *)0xdeadbeefdeadbeef = 1;
 #endif
+
+    /* Initialize PCI Bus */
+    pci_init();
 
     /* Initialize PIC, PIT, and timer subsystem */
     pic_init();

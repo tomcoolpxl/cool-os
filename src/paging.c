@@ -39,7 +39,7 @@ static uint64_t *alloc_page_table(void) {
     return virt;
 }
 
-int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int executable) {
+int paging_map_page(uint64_t vaddr, uint64_t paddr, uint64_t flags) {
     uint64_t cr3 = read_cr3() & PTE_ADDR_MASK;
     uint64_t *pml4 = (uint64_t *)phys_to_hhdm(cr3);
 
@@ -48,22 +48,28 @@ int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int execu
     int pd_idx   = PD_INDEX(vaddr);
     int pt_idx   = PT_INDEX(vaddr);
 
+    /* Determine intermediate flags based on leaf flags */
+    /* Always keep intermediate tables Present and Writable */
+    uint64_t inter_flags = PTE_PRESENT | PTE_WRITABLE;
+    if (flags & PTE_USER) {
+        inter_flags |= PTE_USER;
+    }
+
     /* Level 4: PML4 -> PDPT */
     if (!(pml4[pml4_idx] & PTE_PRESENT)) {
         uint64_t *new_pdpt = alloc_page_table();
         if (!new_pdpt) return -1;
         uint64_t new_pdpt_phys = hhdm_to_phys(new_pdpt);
-        pml4[pml4_idx] = new_pdpt_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        pml4[pml4_idx] = new_pdpt_phys | inter_flags;
     } else {
-        /* Ensure U/S bit is set on existing entry */
-        pml4[pml4_idx] |= PTE_USER;
+        /* Add User bit if requested */
+        if (flags & PTE_USER) pml4[pml4_idx] |= PTE_USER;
     }
 
     uint64_t *pdpt = (uint64_t *)phys_to_hhdm(pml4[pml4_idx] & PTE_ADDR_MASK);
 
     /* Level 3: PDPT -> PD */
     if (pdpt[pdpt_idx] & PTE_HUGE) {
-        /* 1GB huge page - can't map 4K page here */
         serial_puts("paging: cannot map over 1GB huge page\n");
         return -1;
     }
@@ -71,16 +77,15 @@ int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int execu
         uint64_t *new_pd = alloc_page_table();
         if (!new_pd) return -1;
         uint64_t new_pd_phys = hhdm_to_phys(new_pd);
-        pdpt[pdpt_idx] = new_pd_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        pdpt[pdpt_idx] = new_pd_phys | inter_flags;
     } else {
-        pdpt[pdpt_idx] |= PTE_USER;
+        if (flags & PTE_USER) pdpt[pdpt_idx] |= PTE_USER;
     }
 
     uint64_t *pd = (uint64_t *)phys_to_hhdm(pdpt[pdpt_idx] & PTE_ADDR_MASK);
 
     /* Level 2: PD -> PT */
     if (pd[pd_idx] & PTE_HUGE) {
-        /* 2MB huge page - can't map 4K page here */
         serial_puts("paging: cannot map over 2MB huge page\n");
         return -1;
     }
@@ -88,27 +93,27 @@ int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int execu
         uint64_t *new_pt = alloc_page_table();
         if (!new_pt) return -1;
         uint64_t new_pt_phys = hhdm_to_phys(new_pt);
-        pd[pd_idx] = new_pt_phys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        pd[pd_idx] = new_pt_phys | inter_flags;
     } else {
-        pd[pd_idx] |= PTE_USER;
+        if (flags & PTE_USER) pd[pd_idx] |= PTE_USER;
     }
 
     uint64_t *pt = (uint64_t *)phys_to_hhdm(pd[pd_idx] & PTE_ADDR_MASK);
 
     /* Level 1: PT -> Page */
-    uint64_t flags = PTE_PRESENT | PTE_USER;
-    if (writable) {
-        flags |= PTE_WRITABLE;
-    }
-    if (!executable) {
-        flags |= PTE_NX;
-    }
     pt[pt_idx] = (paddr & PTE_ADDR_MASK) | flags;
 
-    /* Flush TLB for this address */
+    /* Flush TLB */
     paging_flush_tlb(vaddr);
 
     return 0;
+}
+
+int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int executable) {
+    uint64_t flags = PTE_PRESENT | PTE_USER;
+    if (writable) flags |= PTE_WRITABLE;
+    if (!executable) flags |= PTE_NX;
+    return paging_map_page(vaddr, paddr, flags);
 }
 
 void paging_flush_tlb(uint64_t vaddr) {

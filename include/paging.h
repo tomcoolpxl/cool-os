@@ -22,6 +22,12 @@
 #define USER_VADDR_BASE 0x400000ULL
 
 /*
+ * Map a physical page at a virtual address with specific flags.
+ * Returns 0 on success, -1 on failure.
+ */
+int paging_map_page(uint64_t vaddr, uint64_t paddr, uint64_t flags);
+
+/*
  * Map a physical page at a user-space virtual address.
  * Creates page table entries as needed with U/S=1, W=writable.
  * If executable=0, sets NX bit to prevent code execution.
