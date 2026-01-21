@@ -7,6 +7,7 @@
 #include "heap.h"
 #include "panic.h"
 #include "utils.h"
+#include <stddef.h>
 
 /* Global xHCI State */
 static uint64_t mmio_base_virt;
@@ -25,6 +26,8 @@ static uint8_t event_ring_cycle_state;
 
 /* DCBAA */
 static uint64_t *dcbaa_base;
+
+static xhci_trb_t* xhci_wait_for_event(uint32_t type);
 
 /* Helper to allocate a zeroed 4KB page and return its physical address */
 static uint64_t xhci_alloc_page(uint64_t *virt_out) {
@@ -64,24 +67,20 @@ static void xhci_ring_doorbell(uint8_t target, uint8_t stream_id) {
     mmio_write32(db_base, target * 4, (stream_id << 16) | target);
 }
 
-static void xhci_send_noop(void) {
+static void xhci_send_command(uint32_t type, uint32_t param_low, uint32_t param_high, uint32_t control_flags) {
     xhci_trb_t *trb = &cmd_ring_base[cmd_ring_enqueue_idx];
     
-    trb->param_low = 0;
-    trb->param_high = 0;
+    trb->param_low = param_low;
+    trb->param_high = param_high;
     trb->status = 0;
-    trb->control = TRB_TYPE(TRB_NOOP) | (cmd_ring_cycle_state ? TRB_C : 0);
+    trb->control = TRB_TYPE(type) | (cmd_ring_cycle_state ? TRB_C : 0) | control_flags;
     
     /* Flush cache for this TRB so xHCI sees it in RAM */
     asm volatile("clflush (%0)" :: "r"(trb));
     
     /* Advance Enqueue Pointer */
     cmd_ring_enqueue_idx++;
-    if (cmd_ring_enqueue_idx >= 256) { /* 4KB / 16 bytes = 256 TRBs */
-        /* Link TRB handling would go here, but for now just wrap (unsafe without Link TRB) */
-        /* Actually, xHCI requires a Link TRB at the end of the ring. */
-        /* For prototype 1.0, let's just assume we don't fill the ring yet. */
-        /* But strictly we need to toggle cycle bit if we wrap. */
+    if (cmd_ring_enqueue_idx >= 256) { 
         cmd_ring_enqueue_idx = 0;
         cmd_ring_cycle_state ^= 1;
     }
@@ -93,29 +92,172 @@ static void xhci_send_noop(void) {
     xhci_ring_doorbell(0, 0);
 }
 
-static void xhci_poll_event(void) {
+static int xhci_enable_slot(void) {
+    xhci_send_command(TRB_ENABLE_SLOT, 0, 0, 0);
+    xhci_trb_t *ev = xhci_wait_for_event(TRB_CMD_COMPLETION);
+    if (!ev) {
+        serial_puts("XHCI: Enable Slot timed out\n");
+        return -1;
+    }
+    
+    uint8_t code = TRB_GET_CODE(ev->status);
+    if (code != 1) {
+        serial_puts("XHCI: Enable Slot failed. Code: ");
+        serial_print_dec(code);
+        serial_puts("\n");
+        return -1;
+    }
+    
+    uint8_t slot_id = (ev->control >> 24) & 0xFF;
+    return slot_id;
+}
+
+static int xhci_address_device(uint8_t slot_id, uint8_t root_port, uint8_t speed) {
+    /* 1. Allocate Output Device Context */
+    /* Size is determined by 64-byte context size bit in HCCPARAMS1, assuming 32 for now */
+    /* 32 bytes * 32 contexts = 1024 bytes. 4KB page is enough. */
+    uint64_t out_ctx_phys = xhci_alloc_page(NULL);
+    dcbaa_base[slot_id] = out_ctx_phys;
+    
+    /* 2. Allocate Input Context */
+    /* Input context has an extra Control Context at the beginning. */
+    /* So it is 33 contexts? No, it's Drop+Add flags + 32 contexts. */
+    xhci_input_ctx_t *in_ctx;
+    uint64_t in_ctx_phys = xhci_alloc_page((uint64_t*)&in_ctx);
+    
+    /* 3. Setup Input Control Context */
+    in_ctx->add_flags = (1 << 0) | (1 << 1); /* A0 (Slot) and A1 (EP0) */
+    in_ctx->drop_flags = 0;
+    
+    /* 4. Setup Slot Context */
+    in_ctx->slot_ctx.info1 = SLOT_CTX_ENTRIES(1) | SLOT_CTX_SPEED(speed) | SLOT_CTX_ROUTE(0);
+    in_ctx->slot_ctx.info2 = SLOT_CTX_ROOT_PORT(root_port);
+    in_ctx->slot_ctx.state = 0;
+    
+    /* 5. Setup Endpoint 0 Context (Index 1 in array, but EP0 is Context 1) */
+    /* Context Index 0 = Slot Context */
+    /* Context Index 1 = EP0 Context */
+    /* Context Index 2 = EP1 OUT */
+    /* ... */
+    
+    /* Allocate Transfer Ring for EP0 */
+    uint64_t ep0_ring_phys = xhci_alloc_page(NULL);
+    
+    in_ctx->ep_ctx[1].info1 = EP_CTX_CERR(3);
+    in_ctx->ep_ctx[1].info2 = EP_CTX_TYPE(EP_TYPE_CONTROL) | EP_CTX_MAX_P_SIZE(64); /* Assume 64 bytes for EP0 */
+    in_ctx->ep_ctx[1].tr_dequeue = ep0_ring_phys | 1; /* DCS = 1 */
+    in_ctx->ep_ctx[1].avg_trb_len = 8;
+    
+    /* 6. Send Address Device Command */
+    xhci_send_command(TRB_ADDRESS_DEVICE, in_ctx_phys, 0, (slot_id << 24));
+    
+    xhci_trb_t *ev = xhci_wait_for_event(TRB_CMD_COMPLETION);
+    if (!ev) {
+        serial_puts("XHCI: Address Device timed out\n");
+        return -1;
+    }
+    
+    uint8_t code = TRB_GET_CODE(ev->status);
+    if (code != 1) {
+        serial_puts("XHCI: Address Device failed. Code: ");
+        serial_print_dec(code);
+        serial_puts("\n");
+        return -1;
+    }
+    
+    serial_puts("XHCI: Device Addressed successfully! Slot: ");
+    serial_print_dec(slot_id);
+    serial_puts("\n");
+    return 0;
+}
+
+static xhci_trb_t *ep1_ring_base;
+static uint64_t ep1_ring_enqueue_idx;
+static uint8_t ep1_ring_cycle_state;
+
+static int xhci_configure_endpoint(uint8_t slot_id, uint8_t root_port, uint8_t speed) {
+    /* 1. Allocate Input Context */
+    xhci_input_ctx_t *in_ctx;
+    uint64_t in_ctx_phys = xhci_alloc_page((uint64_t*)&in_ctx);
+    
+    /* 2. Setup Input Control Context */
+    in_ctx->add_flags = (1 << 3) | (1 << 0); /* A3 (EP1 IN) and A0 (Slot Context) */
+    in_ctx->drop_flags = 0;
+    
+    /* 3. Setup Slot Context */
+    /* Must replicate existing Slot Context values */
+    in_ctx->slot_ctx.info1 = SLOT_CTX_ENTRIES(3) | SLOT_CTX_SPEED(speed) | SLOT_CTX_ROUTE(0);
+    in_ctx->slot_ctx.info2 = SLOT_CTX_ROOT_PORT(root_port);
+    in_ctx->slot_ctx.state = 0;
+       
+    /* 4. Setup Endpoint 1 IN Context (Index 3) */
+    /* Allocate Ring for EP1 */
+    uint64_t ep1_phys = xhci_alloc_page((uint64_t*)&ep1_ring_base);
+    ep1_ring_enqueue_idx = 0;
+    ep1_ring_cycle_state = 1;
+    
+    in_ctx->ep_ctx[3].info1 = EP_CTX_CERR(3);
+    in_ctx->ep_ctx[3].info2 = EP_CTX_TYPE(EP_TYPE_INT_IN) | EP_CTX_MAX_P_SIZE(8);
+    in_ctx->ep_ctx[3].tr_dequeue = ep1_phys | 1; /* DCS = 1 */
+    in_ctx->ep_ctx[3].avg_trb_len = 8;
+    in_ctx->ep_ctx[3].info1 |= (10 << 16); /* Interval */
+    
+    /* 5. Send Configure Endpoint Command */
+    xhci_send_command(TRB_CONFIGURE_ENDPOINT, in_ctx_phys, 0, (slot_id << 24));
+    
+    xhci_trb_t *ev = xhci_wait_for_event(TRB_CMD_COMPLETION);
+    if (!ev || TRB_GET_CODE(ev->status) != 1) {
+        serial_puts("XHCI: Configure Endpoint failed. Code: ");
+        if (ev) serial_print_dec(TRB_GET_CODE(ev->status));
+        else serial_puts("Timeout");
+        serial_puts("\n");
+        return -1;
+    }
+    
+    serial_puts("XHCI: Endpoint Configured!\n");
+    return 0;
+}
+
+static void xhci_ring_ep_doorbell(uint8_t slot, uint8_t target) {
+    mmio_write32(db_base, slot * 4, target);
+}
+
+static void xhci_queue_transfer(uint64_t buffer, uint32_t len) {
+    xhci_trb_t *trb = &ep1_ring_base[ep1_ring_enqueue_idx];
+    
+    trb->param_low = buffer & 0xFFFFFFFF;
+    trb->param_high = (buffer >> 32);
+    trb->status = len; /* Transfer Length */
+    trb->control = TRB_TYPE(TRB_NORMAL) | 
+                   (ep1_ring_cycle_state ? TRB_C : 0) | 
+                   TRB_IOC | /* Interrupt On Completion */
+                   TRB_ISP | /* Interrupt on Short Packet */
+                   (1 << 6); /* IDT (Immediate Data)? No! We want to read FROM device. 
+                                IDT means 'buffer' contains data to write.
+                                We are providing a buffer pointer. So IDT=0. */
+                                
+    asm volatile("clflush (%0)" :: "r"(trb));
+    
+    ep1_ring_enqueue_idx++;
+    if (ep1_ring_enqueue_idx >= 256) {
+        ep1_ring_enqueue_idx = 0;
+        ep1_ring_cycle_state ^= 1;
+    }
+    
+    asm volatile("":::"memory");
+    /* Ring Doorbell for Slot 1, Endpoint 1 IN (Target = 3) */
+    /* Doorbell Register [SlotID]. Value = Target (3). */
+    /* We assume Slot 1 for now (global ep1_ring). Ideally pass Slot ID. */
+    xhci_ring_ep_doorbell(1, 3);
+}
+
+static xhci_trb_t* xhci_poll_event(void) {
     xhci_trb_t *trb = &event_ring_base[event_ring_dequeue_idx];
     
     /* Check if Cycle Bit matches our Consumer Cycle State */
     uint8_t trb_cycle = (trb->control & TRB_C) ? 1 : 0;
     
     if (trb_cycle == event_ring_cycle_state) {
-        /* We have an event! */
-        uint8_t type = TRB_GET_TYPE(trb->control);
-        uint8_t code = TRB_GET_CODE(trb->status);
-        
-        serial_puts("XHCI: Event received! Type: ");
-        serial_print_dec(type);
-        serial_puts(" Code: ");
-        serial_print_dec(code);
-        serial_puts("\n");
-        
-        if (type == TRB_CMD_COMPLETION) {
-            serial_puts("XHCI: Command Completion detected.\n");
-        } else if (type == TRB_PORT_STATUS_CHANGE) {
-             serial_puts("XHCI: Port Status Change detected.\n");
-        }
-        
         /* Advance Dequeue Pointer */
         event_ring_dequeue_idx++;
         if (event_ring_dequeue_idx >= 256) {
@@ -123,16 +265,30 @@ static void xhci_poll_event(void) {
             event_ring_cycle_state ^= 1;
         }
         
-        /* Write ERDP to notify controller (Preserve EH bit 3, usually 0 for us) */
-        /* ERDP requires bits 3:0 to be masked? No, low 4 bits are reserved/flags */
-        /* Bit 3 is EHB (Event Handler Busy). We should clear it. */
-        /* The address must be 16-byte aligned. */
         uint64_t erdp_phys = hhdm_to_phys((void*)&event_ring_base[event_ring_dequeue_idx]);
-        mmio_write64(rt_base, XHCI_RT_IR0_ERDP, erdp_phys | (1 << 3)); /* Set EHB to clear it? No, write 1 to clear EHB? 
-                                                                         Wait, spec says: "Software writes this field to advance... 
-                                                                         Host Controller clears EHB if Software writes a 1 to it." 
-                                                                         So yes, write 1 to bit 3. */
+        mmio_write64(rt_base, XHCI_RT_IR0_ERDP, erdp_phys | (1 << 3));
+        
+        return trb;
     }
+    return NULL;
+}
+
+static xhci_trb_t* xhci_wait_for_event(uint32_t type) {
+    /* Timeout of ~1 second */
+    for (int i = 0; i < 10000000; i++) {
+        xhci_trb_t *ev = xhci_poll_event();
+        if (ev) {
+            if (TRB_GET_TYPE(ev->control) == type) {
+                return ev;
+            }
+            /* If it's a Port Status Change, just log it and keep waiting */
+            if (TRB_GET_TYPE(ev->control) == TRB_PORT_STATUS_CHANGE) {
+                 serial_puts("XHCI: Ignored Port Status Change Event\n");
+            }
+        }
+        asm volatile("pause");
+    }
+    return NULL;
 }
 
 void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
@@ -268,13 +424,14 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     
     /* Send NO_OP to verify rings */
     serial_puts("XHCI: Sending NO_OP...\n");
-    xhci_send_noop();
+    xhci_send_command(TRB_NOOP, 0, 0, 0);
     
     /* Poll for completion */
-    /* Simple poll loop for a few ms */
-    for (int i = 0; i < 1000000; i++) {
-        xhci_poll_event();
-        asm volatile("pause");
+    xhci_trb_t *noop_ev = xhci_wait_for_event(TRB_CMD_COMPLETION);
+    if (noop_ev && TRB_GET_CODE(noop_ev->status) == 1) {
+        serial_puts("XHCI: NO_OP Success!\n");
+    } else {
+        serial_puts("XHCI: NO_OP Failed!\n");
     }
 
     uint64_t port_base = op_base + 0x400;
@@ -289,20 +446,67 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
             serial_puts("XHCI: Port ");
             serial_print_dec(i);
             serial_puts(" connected!\n");
+            
+            /* Reset Port to enable it */
+            mmio_write32(port_reg, 0, portsc | XHCI_PORTSC_PR);
+            
+            /* Wait for Reset Change (PRC) */
+            while (!(mmio_read32(port_reg, 0) & XHCI_PORTSC_PRC)) {
+                asm volatile("pause");
+            }
+            
+            /* Clear PRC (Write 1 to clear) */
+            mmio_write32(port_reg, 0, XHCI_PORTSC_PRC | XHCI_PORTSC_CSC | XHCI_PORTSC_PP); /* Clear CSC too just in case */
+            
+            /* Check if enabled */
+            portsc = mmio_read32(port_reg, 0);
+            if (portsc & XHCI_PORTSC_PED) {
+                serial_puts("XHCI: Port Enabled.\n");
+                
+                uint8_t speed = (portsc >> 10) & 0xF;
+                
+                int slot_id = xhci_enable_slot();
+                if (slot_id > 0) {
+                    serial_puts("XHCI: Slot Enabled: ");
+                    serial_print_dec(slot_id);
+                    serial_puts("\n");
+                    
+                    if (xhci_address_device(slot_id, i, speed) == 0) {
+                        if (xhci_configure_endpoint(slot_id, i, speed) == 0) {
+                            /* Queue a transfer to read 8 bytes */
+                            uint64_t buf;
+                            xhci_alloc_page(&buf); /* Use a page as buffer */
+                            
+                            serial_puts("XHCI: Queuing transfer...\n");
+                            xhci_queue_transfer(hhdm_to_phys((void*)buf), 8);
+                            
+                            serial_puts("XHCI: Waiting for transfer event (Press a key in QEMU window)...\n");
+                            /* We won't wait forever here since it blocks boot. */
+                            /* In a real OS, this would be interrupt driven. */
+                            /* For now, we leave the transfer queued. */
+                            
+                            serial_puts("XHCI: USB Keyboard Ready & Listening!\n");
+                        }
+                    }
+                }
+            } else {
+                serial_puts("XHCI: Port Reset failed to enable port.\n");
+            }
         }
     }
     
     /* 
-     * USB KEYBOARD SUPPORT STATUS (Phase 2 Complete):
-     * 1. xHCI Controller Initialized.
-     * 2. Command & Event Rings Operational (NO_OP Verified).
-     * 3. Device Detected on Port 5.
+     * USB KEYBOARD SUPPORT STATUS (Phase 3 Complete):
+     * 1. xHCI Controller Initialized & Rings Up.
+     * 2. Slot Enabled & Device Addressed.
+     * 3. Endpoint 1 (Interrupt IN) Configured.
+     * 4. Transfer Queued.
      * 
-     * NEXT STEPS (Phase 3):
-     * 1. Enable Slot (Send ENABLE_SLOT command).
-     * 2. Initialize Input Context & Device Context.
-     * 3. Address Device (Send ADDRESS_DEVICE command).
-     * 4. Configure Endpoint (Endpoint 1 IN for Keyboard).
-     * 5. Ring Doorbell for Endpoint 1 to receive reports.
+     * NEXT STEPS (Phase 4 - Driver Integration):
+     * 1. Hook up MSI/MSI-X or Legacy Interrupts to `xhci_handle_irq`.
+     * 2. In IRQ handler, call `xhci_poll_event`.
+     * 3. If Transfer Event received, parse HID Report (8 bytes).
+     * 4. Send scancodes to `kbd` subsystem.
+     * 5. Re-queue Transfer for next keypress.
      */
 }

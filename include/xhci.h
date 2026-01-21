@@ -93,6 +93,53 @@ typedef struct {
     uint32_t reserved;
 } __attribute__((packed)) xhci_erst_entry_t;
 
+/* Context Structures (32-byte CSZ=0 assumed) */
+typedef struct {
+    uint32_t info1;         /* Route String (0:19), Speed (20:23), MTT (25), Hub (26), Context Entries (27:31) */
+    uint32_t info2;         /* Max Exit Latency, Root Hub Port Number, Number of Ports */
+    uint32_t tt_id;
+    uint32_t state;         /* Slot State (27:31), USB Device Address (0:7) */
+    uint32_t reserved[4];
+} __attribute__((packed)) xhci_slot_ctx_t;
+
+typedef struct {
+    uint32_t info1;         /* EP State (0:2), Mult (8:9), MaxPStreams (10:14), LSA (15), Interval (16:23) */
+    uint32_t info2;         /* CErr (1:2), EP Type (3:5), HID (7), Max Burst (8:15), Max Packet Size (16:31) */
+    uint64_t tr_dequeue;    /* Dequeue Pointer (4:63), DCS (0) */
+    uint32_t avg_trb_len;
+    uint32_t reserved[3];
+} __attribute__((packed)) xhci_ep_ctx_t;
+
+typedef struct {
+    uint32_t drop_flags;
+    uint32_t add_flags;
+    uint32_t reserved[6];
+    xhci_slot_ctx_t slot_ctx;
+    xhci_ep_ctx_t ep_ctx[31];
+} __attribute__((packed)) xhci_input_ctx_t;
+
+/* Slot Context Info1 Helpers */
+#define SLOT_CTX_ENTRIES(n)     (((n) & 0x1F) << 27)
+#define SLOT_CTX_SPEED(n)       (((n) & 0xF) << 20)
+#define SLOT_CTX_ROUTE(n)       ((n) & 0xFFFFF)
+
+/* Slot Context Info2 Helpers */
+#define SLOT_CTX_ROOT_PORT(n)   (((n) & 0xFF) << 16)
+
+/* Endpoint Context Info2 Helpers */
+#define EP_CTX_TYPE(n)          (((n) & 0x7) << 3)
+#define EP_CTX_MAX_P_SIZE(n)    (((n) & 0xFFFF) << 16)
+#define EP_CTX_CERR(n)          (((n) & 0x3) << 1)
+
+/* Endpoint Types */
+#define EP_TYPE_CONTROL         4
+#define EP_TYPE_ISO_OUT         1
+#define EP_TYPE_BULK_OUT        2
+#define EP_TYPE_INT_OUT         3
+#define EP_TYPE_ISO_IN          5
+#define EP_TYPE_BULK_IN         6
+#define EP_TYPE_INT_IN          7
+
 void xhci_init(uint8_t bus, uint8_t device, uint8_t function);
 
 #endif
