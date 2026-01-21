@@ -44,6 +44,38 @@
 #define XHCI_PORTSC_CSC         (1 << 17)   /* Connect Status Change */
 #define XHCI_PORTSC_PRC         (1 << 21)   /* Port Reset Change */
 
+/* Runtime Register Offsets (Relative to Runtime Base) */
+#define XHCI_RT_IR0_IMAN        0x20
+#define XHCI_RT_IR0_IMOD        0x24
+#define XHCI_RT_IR0_ERSTSZ      0x28
+#define XHCI_RT_IR0_ERSTBA      0x30
+#define XHCI_RT_IR0_ERDP        0x38
+
+/* TRB Types */
+#define TRB_NORMAL              1
+#define TRB_SETUP_STAGE         2
+#define TRB_DATA_STAGE          3
+#define TRB_STATUS_STAGE        4
+#define TRB_LINK                6
+#define TRB_NOOP                23
+#define TRB_ENABLE_SLOT         9
+#define TRB_ADDRESS_DEVICE      11
+#define TRB_CONFIGURE_ENDPOINT  12
+#define TRB_CMD_COMPLETION      33
+#define TRB_PORT_STATUS_CHANGE  34
+
+/* TRB Control Bits */
+#define TRB_C                   (1 << 0)    /* Cycle Bit */
+#define TRB_TC                  (1 << 1)    /* Toggle Cycle */
+#define TRB_ISP                 (1 << 2)    /* Interrupt on Short Packet */
+#define TRB_CH                  (1 << 4)    /* Chain */
+#define TRB_IOC                 (1 << 5)    /* Interrupt On Completion */
+#define TRB_IDT                 (1 << 6)    /* Immediate Data */
+
+#define TRB_TYPE(p)             ((p) << 10)
+#define TRB_GET_TYPE(control)   (((control) >> 10) & 0x3F)
+#define TRB_GET_CODE(status)    (((status) >> 24) & 0xFF)
+
 /* Data Structures */
 
 /* Transfer Request Block (TRB) */
