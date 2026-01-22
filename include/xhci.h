@@ -141,5 +141,7 @@ typedef struct {
 #define EP_TYPE_INT_IN          7
 
 void xhci_init(uint8_t bus, uint8_t device, uint8_t function);
+void xhci_poll(void);
+void xhci_handle_irq(void);
 
 #endif

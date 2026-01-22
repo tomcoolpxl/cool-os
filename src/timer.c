@@ -3,9 +3,11 @@
 #include "pic.h"
 #include "isr.h"
 #include "kbd.h"
+#include "xhci.h"
 
 #define IRQ_TIMER    0x20
 #define IRQ_KEYBOARD 0x21
+#define IRQ_XHCI     0x22
 
 void timer_init(void) {
     /* Timer is already set up by pic_init() and pit_init() */
@@ -40,5 +42,8 @@ void irq_handler(struct interrupt_frame *frame) {
     } else if (frame->vector == IRQ_KEYBOARD) {
         kbd_handle_irq();
         pic_send_eoi(1);  /* IRQ1 = keyboard */
+    } else if (frame->vector == IRQ_XHCI) {
+        xhci_handle_irq();
+        /* No PIC EOI needed for MSI, but good to know it fired */
     }
 }

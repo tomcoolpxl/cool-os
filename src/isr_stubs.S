@@ -136,6 +136,9 @@ IRQ_STUB 0x20
 /* Generate IRQ stub for keyboard (vector 0x21 = 33) */
 IRQ_STUB 0x21
 
+/* Generate IRQ stub for xHCI (vector 0x22 = 34) */
+IRQ_STUB 0x22
+
 /*
  * Common IRQ stub: save all GPRs, call C handler, restore and iretq
  *

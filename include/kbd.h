@@ -23,6 +23,9 @@ void kbd_init(void);
 /* Called from IRQ1 handler - process a scancode */
 void kbd_handle_irq(void);
 
+/* Process a scancode (Set 1) from any source (PS/2 or USB) */
+void kbd_process_scancode(uint8_t scancode, int pressed);
+
 /* Translate scancode to ASCII (0 = no character) */
 int kbd_translate(uint8_t scancode, int pressed);
 

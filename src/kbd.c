@@ -117,26 +117,7 @@ int kbd_translate(uint8_t scancode, int pressed) {
     return c;
 }
 
-void kbd_handle_irq(void) {
-    /* Read scancode from data port */
-    uint8_t scancode = inb(KBD_DATA_PORT);
-
-    /* Handle extended scancode prefix (0xE0) */
-    if (scancode == 0xE0) {
-        extended_scancode = 1;
-        return;
-    }
-
-    /* For extended scancodes, just clear flag and ignore for now */
-    if (extended_scancode) {
-        extended_scancode = 0;
-        return;
-    }
-
-    /* Determine if this is a press or release event */
-    int pressed = !(scancode & 0x80);
-    uint8_t key = scancode & 0x7F;
-
+void kbd_process_scancode(uint8_t key, int pressed) {
     /* Handle modifier keys */
     switch (key) {
         case SC_LSHIFT:
@@ -168,8 +149,30 @@ void kbd_handle_irq(void) {
             kbd_buffer[kbd_head] = (char)c;
             kbd_head = next_head;
         }
-        /* If buffer full, drop the character */
     }
+}
+
+void kbd_handle_irq(void) {
+    /* Read scancode from data port */
+    uint8_t scancode = inb(KBD_DATA_PORT);
+
+    /* Handle extended scancode prefix (0xE0) */
+    if (scancode == 0xE0) {
+        extended_scancode = 1;
+        return;
+    }
+
+    /* For extended scancodes, just clear flag and ignore for now */
+    if (extended_scancode) {
+        extended_scancode = 0;
+        return;
+    }
+
+    /* Determine if this is a press or release event */
+    int pressed = !(scancode & 0x80);
+    uint8_t key = scancode & 0x7F;
+
+    kbd_process_scancode(key, pressed);
 }
 
 int kbd_getc_nonblock(void) {

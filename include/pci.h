@@ -55,7 +55,22 @@
 #define PCI_OFFSET_BAR3         0x1C
 #define PCI_OFFSET_BAR4         0x20
 #define PCI_OFFSET_BAR5         0x24
+#define PCI_OFFSET_CAP_PTR      0x34
 #define PCI_OFFSET_IRQ          0x3C
+
+/* PCI Capabilities */
+#define PCI_CAP_ID_MSI          0x05
+
+/* MSI Capability Offsets */
+#define PCI_MSI_CTRL            0x02
+#define PCI_MSI_ADDR_LOW        0x04
+#define PCI_MSI_ADDR_HIGH       0x08
+#define PCI_MSI_DATA_32         0x08
+#define PCI_MSI_DATA_64         0x0C
+
+/* MSI Control Register Bits */
+#define PCI_MSI_CTRL_ENABLE     (1 << 0)
+#define PCI_MSI_CTRL_64BIT      (1 << 7)
 
 typedef struct {
     uint8_t bus;
@@ -76,5 +91,8 @@ void pci_init(void);
 uint16_t pci_read_config_16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset);
 uint32_t pci_read_config_32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset);
 void pci_write_config_32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint32_t value);
+void pci_write_config_16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint16_t value);
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t slot, uint8_t func, uint8_t cap_id);
 
 #endif

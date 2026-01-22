@@ -47,6 +47,33 @@ void pci_write_config_32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset
     outl(PCI_CONFIG_DATA, value);
 }
 
+void pci_write_config_16(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint16_t value) {
+    uint32_t address = pci_make_address(bus, slot, func, offset);
+    outl(PCI_CONFIG_ADDRESS, address);
+    
+    /* Read-modify-write for 16-bit access */
+    uint32_t tmp = inl(PCI_CONFIG_DATA);
+    uint32_t shift = (offset & 2) * 8;
+    tmp &= ~(0xFFFF << shift);
+    tmp |= ((uint32_t)value << shift);
+    outl(PCI_CONFIG_DATA, tmp);
+}
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t slot, uint8_t func, uint8_t cap_id) {
+    uint16_t status = pci_read_config_16(bus, slot, func, PCI_OFFSET_STATUS);
+    if (!(status & (1 << 4))) return 0; /* Capability List bit */
+
+    uint8_t cap_ptr = (uint8_t)(pci_read_config_32(bus, slot, func, PCI_OFFSET_CAP_PTR) & 0xFF);
+    
+    while (cap_ptr != 0) {
+        uint32_t cap_reg = pci_read_config_32(bus, slot, func, cap_ptr);
+        uint8_t id = (uint8_t)(cap_reg & 0xFF);
+        if (id == cap_id) return cap_ptr;
+        cap_ptr = (uint8_t)((cap_reg >> 8) & 0xFF);
+    }
+    return 0;
+}
+
 static const char* pci_get_class_name(uint8_t class_id) {
     switch (class_id) {
         case PCI_CLASS_UNDEF: return "Undefined";

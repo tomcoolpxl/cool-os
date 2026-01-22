@@ -53,4 +53,7 @@ extern void irq_stub_0x20(void);
 /* IRQ stub for keyboard (vector 0x21) */
 extern void irq_stub_0x21(void);
 
+/* IRQ stub for xHCI (vector 0x22) */
+extern void irq_stub_0x22(void);
+
 #endif

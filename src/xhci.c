@@ -9,10 +9,95 @@
 #include "utils.h"
 #include <stddef.h>
 
+#include "kbd.h"
+
 /* Global xHCI State */
 static uint64_t mmio_base_virt;
 static uint64_t rt_base;    /* Runtime Register Base */
 static uint64_t db_base;    /* Doorbell Register Base */
+
+/* HID to Scancode Set 1 Translation Table (Partial) */
+static const uint8_t hid_to_scancode[] = {
+    0, 0, 0, 0,
+    30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, /* A-M */
+    50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, /* N-Z */
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, /* 1-0 */
+    28, 1, 14, 15, 57, 12, 13, 26, 27, 43, /* Enter, Esc, Bksp, Tab, Space, -, =, [, ], \ */
+    39, 40, 41, 51, 52, 53, 58, 59, 60, 61, /* ;, ', `, ,, ., /, Caps, F1, F2, F3 */
+    62, 63, 64, 65, 66, 67, 68, 87, 88,     /* F4-F12 */
+};
+
+static uint8_t last_report[8] = {0};
+
+static void xhci_handle_keyboard_report(uint8_t *report) {
+    /* Check for key presses (present in new, not in old) */
+    for (int i = 2; i < 8; i++) {
+        uint8_t key = report[i];
+        if (key == 0) continue;
+        
+        /* Check if it was present before */
+        int present = 0;
+        for (int j = 2; j < 8; j++) {
+            if (last_report[j] == key) {
+                present = 1;
+                break;
+            }
+        }
+        
+        if (!present) {
+            /* Key Pressed */
+            if (key < sizeof(hid_to_scancode)) {
+                uint8_t sc = hid_to_scancode[key];
+                if (sc) {
+                    serial_puts("XHCI: Key Pressed Scancode: ");
+                    serial_print_hex(sc);
+                    serial_puts("\n");
+                    kbd_process_scancode(sc, 1);
+                }
+            }
+        }
+    }
+    
+    /* Check for key releases (present in old, not in new) */
+    for (int i = 2; i < 8; i++) {
+        uint8_t key = last_report[i];
+        if (key == 0) continue;
+        
+        int present = 0;
+        for (int j = 2; j < 8; j++) {
+            if (report[j] == key) {
+                present = 1;
+                break;
+            }
+        }
+        
+        if (!present) {
+            /* Key Released */
+            if (key < sizeof(hid_to_scancode)) {
+                uint8_t sc = hid_to_scancode[key];
+                if (sc) kbd_process_scancode(sc, 0);
+            }
+        }
+    }
+    
+    /* Handle Modifiers (Byte 0) */
+    /* This is simplified. Ideally map modifier bits to scancodes. */
+    /* LCtrl (0), LShift (1), LAlt (2), LGui (3), RCtrl (4), RShift (5), RAlt (6), RGui (7) */
+    /* Check Shifts */
+    if ((report[0] & 2) && !(last_report[0] & 2)) kbd_process_scancode(0x2A, 1); /* LShift Press */
+    if (!(report[0] & 2) && (last_report[0] & 2)) kbd_process_scancode(0x2A, 0); /* LShift Release */
+    if ((report[0] & 32) && !(last_report[0] & 32)) kbd_process_scancode(0x36, 1); /* RShift Press */
+    if (!(report[0] & 32) && (last_report[0] & 32)) kbd_process_scancode(0x36, 0); /* RShift Release */
+    
+    /* Check Ctrls */
+    if ((report[0] & 1) && !(last_report[0] & 1)) kbd_process_scancode(0x1D, 1); /* LCtrl Press */
+    if (!(report[0] & 1) && (last_report[0] & 1)) kbd_process_scancode(0x1D, 0); /* LCtrl Release */
+    if ((report[0] & 16) && !(last_report[0] & 16)) kbd_process_scancode(0x1D, 1); /* RCtrl Press (Mapping both to LCtrl for now) */
+    if (!(report[0] & 16) && (last_report[0] & 16)) kbd_process_scancode(0x1D, 0); /* RCtrl Release */
+    
+    /* Update last report */
+    for (int i = 0; i < 8; i++) last_report[i] = report[i];
+}
 
 /* Command Ring State */
 static xhci_trb_t *cmd_ring_base;
@@ -26,6 +111,10 @@ static uint8_t event_ring_cycle_state;
 
 /* DCBAA */
 static uint64_t *dcbaa_base;
+
+/* Keyboard Buffer */
+static uint64_t kbd_buf_virt;
+static uint64_t kbd_buf_phys;
 
 static xhci_trb_t* xhci_wait_for_event(uint32_t type);
 
@@ -291,12 +380,45 @@ static xhci_trb_t* xhci_wait_for_event(uint32_t type) {
     return NULL;
 }
 
+/* Polling Function - Replaced by IRQ handler */
+void xhci_handle_irq(void) {
+    /* Check if this interrupter fired */
+    uint32_t iman = mmio_read32(rt_base, XHCI_RT_IR0_IMAN);
+    if (!(iman & 1)) return; /* IP bit not set */
+
+    /* Acknowledge Interrupt by writing 1 to IP */
+    mmio_write32(rt_base, XHCI_RT_IR0_IMAN, iman | 1);
+
+    /* Process all events in the ring */
+    xhci_trb_t *ev;
+    while ((ev = xhci_poll_event()) != NULL) {
+        if (TRB_GET_TYPE(ev->control) == 32) { /* Transfer Event */
+            /* Check completion code */
+            uint8_t code = TRB_GET_CODE(ev->status);
+            if (code == 1 || code == 13) { /* Success or Short Packet */
+                 xhci_handle_keyboard_report((uint8_t*)kbd_buf_virt);
+            } else {
+                 serial_puts("XHCI: Transfer Error Code: ");
+                 serial_print_dec(code);
+                 serial_puts("\n");
+            }
+            
+            /* Re-queue transfer */
+            xhci_queue_transfer(kbd_buf_phys, 8);
+        }
+    }
+}
+
 void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     serial_puts("XHCI: Initializing...\n");
 
     /* 1. Get MMIO Base Address from BAR0 */
     uint32_t bar0 = pci_read_config_32(bus, device, function, PCI_OFFSET_BAR0);
     uint32_t bar1 = pci_read_config_32(bus, device, function, PCI_OFFSET_BAR1);
+    
+    /* Enable Bus Master and MMIO in PCI Command Register */
+    uint16_t cmd = pci_read_config_16(bus, device, function, PCI_OFFSET_COMMAND);
+    pci_write_config_16(bus, device, function, PCI_OFFSET_COMMAND, cmd | (1 << 1) | (1 << 2));
     
     /* Check if it's 64-bit BAR */
     uint64_t mmio_phys = bar0 & 0xFFFFFFF0;
@@ -322,6 +444,30 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     uint32_t caps_0 = mmio_read32(mmio_virt, XHCI_CAP_CAPLENGTH);
     uint8_t cap_length = caps_0 & 0xFF;
     uint16_t hci_version = (caps_0 >> 16) & 0xFFFF;
+
+    /* Enable MSI */
+    uint8_t msi_ptr = pci_find_capability(bus, device, function, PCI_CAP_ID_MSI);
+    if (msi_ptr) {
+        serial_puts("XHCI: Configuring MSI...\n");
+        uint16_t msg_ctrl = pci_read_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL);
+        
+        /* 
+         * MSI Message Address: 0xFEE00000 (standard for local APIC)
+         * MSI Message Data: 0x22 (Vector)
+         */
+        pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_LOW, 0xFEE00000);
+        if (msg_ctrl & PCI_MSI_CTRL_64BIT) {
+            pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_HIGH, 0);
+            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_64, 0x22);
+        } else {
+            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_32, 0x22);
+        }
+        
+        /* Enable MSI in Control Register */
+        pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL, msg_ctrl | PCI_MSI_CTRL_ENABLE);
+    } else {
+        serial_puts("XHCI: MSI not supported by controller!\n");
+    }
     
     uint32_t hcs_params1 = mmio_read32(mmio_virt, XHCI_CAP_HCSPARAMS1);
     
@@ -414,8 +560,8 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     mmio_write64(rt_base, XHCI_RT_IR0_ERSTBA, erst_phys);
     mmio_write64(rt_base, XHCI_RT_IR0_ERDP, er_phys);
     
-    /* Enable Interrupts (IMAN) - even if polling, good to enable IP */
-    mmio_write32(rt_base, XHCI_RT_IR0_IMAN, 2); /* Bit 1: IP (Interrupt Pending), Bit 0: IE (Interrupt Enable) */
+    /* Enable Interrupts (IMAN) */
+    mmio_write32(rt_base, XHCI_RT_IR0_IMAN, 1); /* Bit 0: IE (Interrupt Enable) */
     mmio_write32(op_base, XHCI_OP_USBCMD, XHCI_CMD_INTE); /* Global Interrupt Enable */
 
     /* 7. Start Controller */
@@ -474,11 +620,10 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
                     if (xhci_address_device(slot_id, i, speed) == 0) {
                         if (xhci_configure_endpoint(slot_id, i, speed) == 0) {
                             /* Queue a transfer to read 8 bytes */
-                            uint64_t buf;
-                            xhci_alloc_page(&buf); /* Use a page as buffer */
+                            kbd_buf_phys = xhci_alloc_page(&kbd_buf_virt);
                             
                             serial_puts("XHCI: Queuing transfer...\n");
-                            xhci_queue_transfer(hhdm_to_phys((void*)buf), 8);
+                            xhci_queue_transfer(kbd_buf_phys, 8);
                             
                             serial_puts("XHCI: Waiting for transfer event (Press a key in QEMU window)...\n");
                             /* We won't wait forever here since it blocks boot. */
@@ -494,19 +639,4 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
             }
         }
     }
-    
-    /* 
-     * USB KEYBOARD SUPPORT STATUS (Phase 3 Complete):
-     * 1. xHCI Controller Initialized & Rings Up.
-     * 2. Slot Enabled & Device Addressed.
-     * 3. Endpoint 1 (Interrupt IN) Configured.
-     * 4. Transfer Queued.
-     * 
-     * NEXT STEPS (Phase 4 - Driver Integration):
-     * 1. Hook up MSI/MSI-X or Legacy Interrupts to `xhci_handle_irq`.
-     * 2. In IRQ handler, call `xhci_poll_event`.
-     * 3. If Transfer Event received, parse HID Report (8 bytes).
-     * 4. Send scancodes to `kbd` subsystem.
-     * 5. Re-queue Transfer for next keypress.
-     */
 }
