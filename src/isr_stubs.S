@@ -139,6 +139,9 @@ IRQ_STUB 0x21
 /* Generate IRQ stub for xHCI (vector 0x22 = 34) */
 IRQ_STUB 0x22
 
+/* Generate IRQ stub for xHCI (vector 0x40 = 64) */
+IRQ_STUB 0x40
+
 /*
  * Common IRQ stub: save all GPRs, call C handler, restore and iretq
  *

@@ -1,12 +1,16 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary goal is debuggability, reproducibility, and incremental extensibility for educational purposes.
+`cool-os` is a teaching-oriented, monolithic x86-64 kernel developed for educational purposes. The project emphasizes clarity, debuggability, and incremental development. It is designed to boot via UEFI using the Limine bootloader and run on QEMU with KVM acceleration, with future compatibility for real hardware in mind.
 
-**Current Status:** Proto 12 complete (Keyboard Input). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+The kernel is written primarily in C, with some assembly for low-level tasks like context switching and interrupt handling. It features a higher-half kernel memory layout, a physical memory manager (PMM), a kernel heap, a cooperative scheduler, support for user-mode applications (loaded as ELF files), a VFS layer with a FAT32 driver, and basic graphics support via a framebuffer console.
+
+**Implemented:** prototypes in `./DONE/prototype*.md`
+
+**Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
+
+**Current Status:** Proto 12 in progress (Keyboard Input). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
 
 ## Target Architecture
 
@@ -14,6 +18,14 @@ cool-os is a teaching-oriented x86-64 monolithic kernel prototype. The primary g
 - UEFI boot via Limine bootloader (no legacy BIOS)
 - Primary execution: QEMU with KVM acceleration
 - Secondary: Real x86-64 UEFI hardware
+
+### Toolchain and Architecture
+
+*   **Architecture**: x86-64 (Long Mode)
+*   **Bootloader**: Limine (UEFI)
+*   **Compiler**: `gcc`
+*   **Linker**: `ld`
+*   **Emulator**: `qemu-system-x86_64`
 
 ## Build Commands
 
@@ -147,11 +159,6 @@ Build flavor differences:
 - Special character handling: `\n`, `\r`, `\t`, `\b`
 - Panic messages displayed on both console and serial
 - White text on black background (configurable colors internally)
-
-### Proto 12: Keyboard Input
-- PS/2 keyboard driver via i8042 controller (data port 0x60, status port 0x64)
-- IRQ1 handling (vector 0x21) with PIC integration
-- Scancode Set 1 decoding (press/release detection)
 - ASCII translation with shift and caps lock support
 - 256-byte ring buffer for asynchronous input
 - Keyboard API: `kbd_init()`, `kbd_getc_nonblock()`, `kbd_getc_blocking()`, `kbd_readline()`
@@ -234,7 +241,7 @@ user/
   yield2.S    - Yield test program 2
   fault.S     - Privilege separation test
   user.ld     - Linker script for user programs
-
+prototype13.md prototype14.md prototype15.md prototype16.md prototype17.md prototype18.md prototype19.md prototype20.md prototype21.md prototype22.md prototype23.md prototype24.md prototype25.md prototype26.md prototype27.md prototype28.md prototype29.md prototype30.md prototype31.md prototype32.md prototype33.md prototype34.md prototype35.md prototype36.md prototype37.md prototype38.md prototype39.md prototype40.md
 tests/
   kernel_tests.c   - Interactive test suite (included in test flavor via TEST_BUILD)
   regtest_suites.c - Automated regression test suites (included in regtest flavor)
@@ -299,9 +306,7 @@ echo $?             # 0 = pass, 1 = fail
 
 | QEMU Exit | Script Exit | Meaning |
 |-----------|-------------|---------|
-| 1 | 0 | All tests passed |
-| 3 | 1 | One or more tests failed |
-| 124 | 1 | Timeout (hung or infinite loop) |
+| 1 | 0 | All tprototype13.md prototype14.md prototype15.md prototype16.md prototype17.md prototype18.md prototype19.md prototype20.md prototype21.md prototype22.md prototype23.md prototype24.md prototype25.md prototype26.md prototype27.md prototype28.md prototype29.md prototype30.md prototype31.md prototype32.md prototype33.md prototype34.md prototype35.md prototype36.md prototype37.md prototype38.md prototype39.md prototype40.mdeout (hung or infinite loop) |
 | Other | 1 | Unexpected error |
 
 ### API (`include/regtest.h`)

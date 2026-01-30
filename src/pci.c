@@ -66,6 +66,9 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t slot, uint8_t func, uint8_t cap
     uint8_t cap_ptr = (uint8_t)(pci_read_config_32(bus, slot, func, PCI_OFFSET_CAP_PTR) & 0xFF);
     
     while (cap_ptr != 0) {
+        /* Safety check: ensure pointer is 32-bit aligned (bottom 2 bits 0) and valid range */
+        if ((cap_ptr & 3) || cap_ptr < 0x40) return 0;
+        
         uint32_t cap_reg = pci_read_config_32(bus, slot, func, cap_ptr);
         uint8_t id = (uint8_t)(cap_reg & 0xFF);
         if (id == cap_id) return cap_ptr;

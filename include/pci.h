@@ -60,6 +60,7 @@
 
 /* PCI Capabilities */
 #define PCI_CAP_ID_MSI          0x05
+#define PCI_CAP_ID_MSIX         0x11
 
 /* MSI Capability Offsets */
 #define PCI_MSI_CTRL            0x02

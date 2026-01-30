@@ -36,6 +36,9 @@ void idt_init(void) {
     /* Install IRQ handler for xHCI (vector 0x22) */
     idt_set_gate(0x22, (uint64_t)irq_stub_0x22, IDT_TYPE_INTERRUPT_GATE);
 
+    /* Install IRQ handler for xHCI (vector 0x40) */
+    idt_set_gate(0x40, (uint64_t)irq_stub_0x40, IDT_TYPE_INTERRUPT_GATE);
+
     /* Load IDT register */
     idtr.limit = sizeof(idt) - 1;
     idtr.base  = (uint64_t)&idt;

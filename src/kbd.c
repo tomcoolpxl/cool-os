@@ -71,8 +71,15 @@ static const char scancode_shifted[128] = {
 #define SC_ALT      0x38
 
 void kbd_init(void) {
+    /* Check if controller exists (if read returns 0xFF, likely no device) */
+    if (inb(KBD_STATUS_PORT) == 0xFF) {
+        serial_puts("KBD: Controller not found (0xFF)\n");
+        return;
+    }
+
     /* Flush any pending data from keyboard controller */
-    while (inb(KBD_STATUS_PORT) & KBD_STATUS_OUTPUT_FULL) {
+    int timeout = 10000;
+    while ((inb(KBD_STATUS_PORT) & KBD_STATUS_OUTPUT_FULL) && timeout-- > 0) {
         inb(KBD_DATA_PORT);
     }
 

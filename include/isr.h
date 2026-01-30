@@ -56,4 +56,7 @@ extern void irq_stub_0x21(void);
 /* IRQ stub for xHCI (vector 0x22) */
 extern void irq_stub_0x22(void);
 
+/* IRQ stub for xHCI (vector 0x40) */
+extern void irq_stub_0x40(void);
+
 #endif

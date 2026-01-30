@@ -201,6 +201,11 @@ static int xhci_enable_slot(void) {
     return slot_id;
 }
 
+/* EP0 Ring State (for Slot 1) */
+static xhci_trb_t *ep0_ring_base;
+static uint64_t ep0_ring_enqueue_idx;
+static uint8_t ep0_ring_cycle_state;
+
 static int xhci_address_device(uint8_t slot_id, uint8_t root_port, uint8_t speed) {
     /* 1. Allocate Output Device Context */
     /* Size is determined by 64-byte context size bit in HCCPARAMS1, assuming 32 for now */
@@ -230,7 +235,9 @@ static int xhci_address_device(uint8_t slot_id, uint8_t root_port, uint8_t speed
     /* ... */
     
     /* Allocate Transfer Ring for EP0 */
-    uint64_t ep0_ring_phys = xhci_alloc_page(NULL);
+    uint64_t ep0_ring_phys = xhci_alloc_page((uint64_t*)&ep0_ring_base);
+    ep0_ring_enqueue_idx = 0;
+    ep0_ring_cycle_state = 1;
     
     in_ctx->ep_ctx[1].info1 = EP_CTX_CERR(3);
     in_ctx->ep_ctx[1].info2 = EP_CTX_TYPE(EP_TYPE_CONTROL) | EP_CTX_MAX_P_SIZE(64); /* Assume 64 bytes for EP0 */
@@ -257,6 +264,70 @@ static int xhci_address_device(uint8_t slot_id, uint8_t root_port, uint8_t speed
     serial_puts("XHCI: Device Addressed successfully! Slot: ");
     serial_print_dec(slot_id);
     serial_puts("\n");
+    return 0;
+}
+
+static void xhci_ring_ep_doorbell(uint8_t slot, uint8_t target);
+
+static int xhci_send_control_transfer(uint8_t slot_id, uint8_t req_type, uint8_t req, uint16_t val, uint16_t idx, uint16_t len) {
+    /* Setup Stage TRB */
+    xhci_trb_t *setup = &ep0_ring_base[ep0_ring_enqueue_idx];
+    
+    setup->param_low = req_type | (req << 8) | (val << 16);
+    setup->param_high = idx | (len << 16);
+    setup->status = 8; /* Length of Setup Packet is always 8 */
+    setup->control = TRB_TYPE(TRB_SETUP_STAGE) | 
+                     (ep0_ring_cycle_state ? TRB_C : 0) | 
+                     TRB_IDT; /* Immediate Data */
+                     
+    /* If len > 0, we need Data Stage. For SetConfiguration (len=0), it's No Data. */
+    if (len == 0) {
+        setup->control |= (0 << 16); /* TRT = 0 (No Data Stage) */
+    } else {
+        /* Assume IN for now */
+        setup->control |= (3 << 16); /* TRT = 3 (IN Data Stage) */
+    }
+    
+    ep0_ring_enqueue_idx++;
+    if (ep0_ring_enqueue_idx >= 256) {
+        ep0_ring_enqueue_idx = 0;
+        ep0_ring_cycle_state ^= 1;
+    }
+    
+    /* Status Stage TRB */
+    xhci_trb_t *status = &ep0_ring_base[ep0_ring_enqueue_idx];
+    status->param_low = 0;
+    status->param_high = 0;
+    status->status = 0;
+    status->control = TRB_TYPE(TRB_STATUS_STAGE) |
+                      (ep0_ring_cycle_state ? TRB_C : 0) |
+                      TRB_IOC | /* Interrupt on Completion */
+                      (1 << 16); /* DIR = 1 (IN) for Status Stage of OUT (No Data) transfer */
+                      
+    /* If No Data Stage, Status Stage direction is IN */
+    
+    asm volatile("clflush (%0)" :: "r"(setup));
+    asm volatile("clflush (%0)" :: "r"(status));
+    
+    ep0_ring_enqueue_idx++;
+    if (ep0_ring_enqueue_idx >= 256) {
+        ep0_ring_enqueue_idx = 0;
+        ep0_ring_cycle_state ^= 1;
+    }
+    
+    asm volatile("":::"memory");
+    /* Ring Doorbell for Slot 1, Endpoint 0 (Target = 1) */
+    xhci_ring_ep_doorbell(slot_id, 1);
+    
+    /* Wait for completion */
+    xhci_trb_t *ev = xhci_wait_for_event(32); /* Transfer Event */
+    if (!ev || TRB_GET_CODE(ev->status) != 1) {
+        serial_puts("XHCI: Control Transfer Failed. Code: ");
+        if (ev) serial_print_dec(TRB_GET_CODE(ev->status));
+        else serial_puts("Timeout");
+        serial_puts("\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -320,10 +391,8 @@ static void xhci_queue_transfer(uint64_t buffer, uint32_t len) {
     trb->control = TRB_TYPE(TRB_NORMAL) | 
                    (ep1_ring_cycle_state ? TRB_C : 0) | 
                    TRB_IOC | /* Interrupt On Completion */
-                   TRB_ISP | /* Interrupt on Short Packet */
-                   (1 << 6); /* IDT (Immediate Data)? No! We want to read FROM device. 
-                                IDT means 'buffer' contains data to write.
-                                We are providing a buffer pointer. So IDT=0. */
+                   TRB_ISP; /* Interrupt on Short Packet */
+                   /* IDT must be 0 for Normal TRB with data buffer pointer */
                                 
     asm volatile("clflush (%0)" :: "r"(trb));
     
@@ -342,6 +411,9 @@ static void xhci_queue_transfer(uint64_t buffer, uint32_t len) {
 
 static xhci_trb_t* xhci_poll_event(void) {
     xhci_trb_t *trb = &event_ring_base[event_ring_dequeue_idx];
+    
+    /* Ensure we read fresh data from RAM */
+    asm volatile("clflush (%0)" :: "r"(trb));
     
     /* Check if Cycle Bit matches our Consumer Cycle State */
     uint8_t trb_cycle = (trb->control & TRB_C) ? 1 : 0;
@@ -363,8 +435,8 @@ static xhci_trb_t* xhci_poll_event(void) {
 }
 
 static xhci_trb_t* xhci_wait_for_event(uint32_t type) {
-    /* Timeout of ~1 second */
-    for (int i = 0; i < 10000000; i++) {
+    /* Timeout */
+    for (int i = 0; i < 50000000; i++) {
         xhci_trb_t *ev = xhci_poll_event();
         if (ev) {
             if (TRB_GET_TYPE(ev->control) == type) {
@@ -373,6 +445,10 @@ static xhci_trb_t* xhci_wait_for_event(uint32_t type) {
             /* If it's a Port Status Change, just log it and keep waiting */
             if (TRB_GET_TYPE(ev->control) == TRB_PORT_STATUS_CHANGE) {
                  serial_puts("XHCI: Ignored Port Status Change Event\n");
+            } else {
+                 serial_puts("XHCI: Unexpected Event Type: ");
+                 serial_print_dec(TRB_GET_TYPE(ev->control));
+                 serial_puts("\n");
             }
         }
         asm volatile("pause");
@@ -384,6 +460,10 @@ static xhci_trb_t* xhci_wait_for_event(uint32_t type) {
 void xhci_handle_irq(void) {
     /* Check if this interrupter fired */
     uint32_t iman = mmio_read32(rt_base, XHCI_RT_IR0_IMAN);
+    
+    /* Also clear EINT in USBSTS to keep things clean */
+    mmio_write32(mmio_base_virt, 0x44, XHCI_STS_EINT);
+    
     if (!(iman & 1)) return; /* IP bit not set */
 
     /* Acknowledge Interrupt by writing 1 to IP */
@@ -440,35 +520,15 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     serial_print_hex(mmio_virt);
     serial_puts("\n");
     
+    serial_puts("XHCI: Mapped to Virtual Address: ");
+    serial_print_hex(mmio_virt);
+    serial_puts("\n");
+    
     /* 2. Read Capability Registers */
     uint32_t caps_0 = mmio_read32(mmio_virt, XHCI_CAP_CAPLENGTH);
     uint8_t cap_length = caps_0 & 0xFF;
     uint16_t hci_version = (caps_0 >> 16) & 0xFFFF;
 
-    /* Enable MSI */
-    uint8_t msi_ptr = pci_find_capability(bus, device, function, PCI_CAP_ID_MSI);
-    if (msi_ptr) {
-        serial_puts("XHCI: Configuring MSI...\n");
-        uint16_t msg_ctrl = pci_read_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL);
-        
-        /* 
-         * MSI Message Address: 0xFEE00000 (standard for local APIC)
-         * MSI Message Data: 0x22 (Vector)
-         */
-        pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_LOW, 0xFEE00000);
-        if (msg_ctrl & PCI_MSI_CTRL_64BIT) {
-            pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_HIGH, 0);
-            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_64, 0x22);
-        } else {
-            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_32, 0x22);
-        }
-        
-        /* Enable MSI in Control Register */
-        pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL, msg_ctrl | PCI_MSI_CTRL_ENABLE);
-    } else {
-        serial_puts("XHCI: MSI not supported by controller!\n");
-    }
-    
     uint32_t hcs_params1 = mmio_read32(mmio_virt, XHCI_CAP_HCSPARAMS1);
     
     serial_puts("XHCI: CapLength: ");
@@ -487,6 +547,70 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     serial_puts("XHCI: Runtime Base Offset: ");
     serial_print_hex(rtsoff);
     serial_puts("\n");
+
+    /* Enable MSI or MSI-X */
+    uint8_t msi_ptr = pci_find_capability(bus, device, function, PCI_CAP_ID_MSI);
+    if (msi_ptr) {
+        serial_puts("XHCI: Configuring MSI...\n");
+        uint16_t msg_ctrl = pci_read_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL);
+        
+        /* 
+         * MSI Message Address: 0xFEE00000 (standard for local APIC)
+         * MSI Message Data: 0x40 (Vector, moved from 0x22 to avoid PIC conflict)
+         */
+        pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_LOW, 0xFEE00000);
+        if (msg_ctrl & PCI_MSI_CTRL_64BIT) {
+            pci_write_config_32(bus, device, function, msi_ptr + PCI_MSI_ADDR_HIGH, 0);
+            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_64, 0x40);
+        } else {
+            pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_DATA_32, 0x40);
+        }
+        
+        /* Enable MSI in Control Register */
+        pci_write_config_16(bus, device, function, msi_ptr + PCI_MSI_CTRL, msg_ctrl | PCI_MSI_CTRL_ENABLE);
+    } else {
+        /* Try MSI-X */
+        uint8_t msix_ptr = pci_find_capability(bus, device, function, PCI_CAP_ID_MSIX);
+        if (msix_ptr) {
+             serial_puts("XHCI: Configuring MSI-X...\n");
+             uint16_t msg_ctrl = pci_read_config_16(bus, device, function, msix_ptr + 2); // Message Control
+             uint32_t table_off = pci_read_config_32(bus, device, function, msix_ptr + 4); // Table Offset
+             
+             uint8_t bir = table_off & 0x7;
+             uint32_t offset = table_off & ~0x7;
+             
+             /* Check if BIR is 0 (BAR0) */
+             if (bir == 0) {
+                 /* We already mapped BAR0 at mmio_virt */
+                 /* MSI-X Table Entry 0 is at mmio_virt + offset */
+                 uint64_t table_entry_addr = mmio_virt + offset;
+                 
+                 /* Entry 0: Msg Addr Low (0xFEE00000) */
+                 mmio_write32(table_entry_addr, 0, 0xFEE00000);
+                 /* Entry 0: Msg Addr High (0) */
+                 mmio_write32(table_entry_addr, 4, 0);
+                 /* Entry 0: Msg Data (0x40) */
+                 mmio_write32(table_entry_addr, 8, 0x40);
+                 /* Entry 0: Vector Control (0 = Unmasked) */
+                 mmio_write32(table_entry_addr, 12, 0);
+                 
+                 /* Enable MSI-X in Control Register (Bit 15) */
+                 /* Also Clear Mask All (Bit 14) just in case */
+                 pci_write_config_16(bus, device, function, msix_ptr + 2, (msg_ctrl & ~0x4000) | 0x8000); // Bit 15: Enable, Bit 14: Mask
+                 
+                 serial_puts("XHCI: MSI-X Enabled.\n");
+             } else {
+                 serial_puts("XHCI: MSI-X Table in unsupported BAR: ");
+                 serial_print_dec(bir);
+                 serial_puts("\n");
+             }
+        } else {
+             serial_puts("XHCI: MSI/MSI-X not supported by controller!\n");
+        }
+    }
+    
+    /* Set Interrupt Moderation to 0 (Immediate) */
+    mmio_write32(rt_base, XHCI_RT_IR0_IMOD, 0);
 
     /* 3. Operational Registers */
     uint64_t op_base = mmio_virt + cap_length;
@@ -561,7 +685,7 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     mmio_write64(rt_base, XHCI_RT_IR0_ERDP, er_phys);
     
     /* Enable Interrupts (IMAN) */
-    mmio_write32(rt_base, XHCI_RT_IR0_IMAN, 1); /* Bit 0: IE (Interrupt Enable) */
+    mmio_write32(rt_base, XHCI_RT_IR0_IMAN, 2); /* Bit 1: IE (Interrupt Enable) */
     mmio_write32(op_base, XHCI_OP_USBCMD, XHCI_CMD_INTE); /* Global Interrupt Enable */
 
     /* 7. Start Controller */
@@ -610,6 +734,9 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
                 serial_puts("XHCI: Port Enabled.\n");
                 
                 uint8_t speed = (portsc >> 10) & 0xF;
+                serial_puts("XHCI: Port Speed: ");
+                serial_print_dec(speed);
+                serial_puts("\n");
                 
                 int slot_id = xhci_enable_slot();
                 if (slot_id > 0) {
@@ -618,6 +745,18 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
                     serial_puts("\n");
                     
                     if (xhci_address_device(slot_id, i, speed) == 0) {
+                        /* Set Configuration 1 */
+                        /* ReqType = 0 (Host to Device, Standard, Device Recipient) */
+                        /* Request = 9 (SET_CONFIGURATION) */
+                        /* Value = 1 (Config Value) */
+                        /* Index = 0 */
+                        /* Length = 0 */
+                        serial_puts("XHCI: Sending SetConfiguration(1)...\n");
+                        xhci_send_control_transfer(slot_id, 0, 9, 1, 0, 0);
+                        
+                        /* Ignore failure and try to configure endpoint anyway */
+                        serial_puts("XHCI: Proceeding to Configure Endpoint...\n");
+                            
                         if (xhci_configure_endpoint(slot_id, i, speed) == 0) {
                             /* Queue a transfer to read 8 bytes */
                             kbd_buf_phys = xhci_alloc_page(&kbd_buf_virt);

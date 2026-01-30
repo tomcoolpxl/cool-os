@@ -23,6 +23,7 @@
 #include "console.h"
 #include "kbd.h"
 #include "pci.h"
+#include "lapic.h"
 
 #ifdef REGTEST_BUILD
 #include "regtest.h"
@@ -332,6 +333,9 @@ void kmain(void) {
     pic_init();
     pit_init(100);
     timer_init();
+    
+    /* Enable Local APIC for MSI support */
+    lapic_init();
 
     /* Initialize keyboard driver (after PIC so IRQ1 unmask works) */
     kbd_init();
