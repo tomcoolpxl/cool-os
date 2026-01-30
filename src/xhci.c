@@ -537,6 +537,62 @@ void xhci_init(uint8_t bus, uint8_t device, uint8_t function) {
     serial_print_hex(hci_version);
     serial_puts("\n");
     
+    /* Perform BIOS Handoff */
+    uint32_t hccparams1 = mmio_read32(mmio_virt, XHCI_CAP_HCCPARAMS1);
+    uint32_t xecp = (hccparams1 >> 16) & 0xFFFF;
+    
+    if (xecp != 0) {
+        uint32_t offset = xecp << 2;
+        while (offset) {
+            uint32_t cap_reg = mmio_read32(mmio_virt, offset);
+            uint8_t cap_id = cap_reg & 0xFF;
+            
+            if (cap_id == 1) { /* USB Legacy Support */
+                serial_puts("XHCI: Found USB Legacy Support capability at offset ");
+                serial_print_hex(offset);
+                serial_puts("\n");
+                
+                if (cap_reg & (1 << 16)) { /* BIOS Owned */
+                    serial_puts("XHCI: BIOS owns controller. Requesting handoff...\n");
+                    
+                    /* Request ownership */
+                    mmio_write32(mmio_virt, offset, cap_reg | (1 << 24));
+                    
+                    /* Wait for BIOS to release */
+                    int timeout = 10000;
+                    while (1) {
+                        uint32_t val = mmio_read32(mmio_virt, offset);
+                        if ((val & (1 << 16)) == 0 && (val & (1 << 24))) {
+                            serial_puts("XHCI: Handoff successful!\n");
+                            break;
+                        }
+                        if (timeout-- <= 0) {
+                            serial_puts("XHCI: Handoff timed out! Force continuing.\n");
+                            break;
+                        }
+                        /* Small delay loop */
+                        for (volatile int t=0; t<10000; t++);
+                    }
+                } else {
+                     serial_puts("XHCI: OS already owns controller.\n");
+                     mmio_write32(mmio_virt, offset, cap_reg | (1 << 24));
+                }
+                
+                /* Disable legacy SMIs in USBLEGCTLSTS (Offset + 4) */
+                uint32_t ctl_sts = mmio_read32(mmio_virt, offset + 4);
+                mmio_write32(mmio_virt, offset + 4, ctl_sts & 0x0000E000); /* Clear SMI enables */
+                
+                break;
+            }
+            
+            uint8_t next = (cap_reg >> 8) & 0xFF;
+            if (next == 0) break;
+            offset += (next << 2);
+        }
+    } else {
+        serial_puts("XHCI: No Extended Capabilities found.\n");
+    }
+
     mmio_base_virt = mmio_virt;
     uint32_t rtsoff = mmio_read32(mmio_virt, XHCI_CAP_RTSOFF);
     uint32_t dboff = mmio_read32(mmio_virt, XHCI_CAP_DBOFF);

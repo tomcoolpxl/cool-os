@@ -163,6 +163,10 @@ void kbd_handle_irq(void) {
     /* Read scancode from data port */
     uint8_t scancode = inb(KBD_DATA_PORT);
 
+    serial_puts("KBD: Scancode: ");
+    serial_print_hex(scancode);
+    serial_puts("\n");
+
     /* Handle extended scancode prefix (0xE0) */
     if (scancode == 0xE0) {
         extended_scancode = 1;

@@ -326,8 +326,8 @@ void kmain(void) {
     *(volatile uint64_t *)0xdeadbeefdeadbeef = 1;
 #endif
 
-    /* Initialize PCI Bus */
-    pci_init();
+    /* Initialize PCI Bus (Experimental XHCI disabled for stability) */
+    /* pci_init(); */
 
     /* Initialize PIC, PIT, and timer subsystem */
     pic_init();

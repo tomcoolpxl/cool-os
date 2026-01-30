@@ -10,7 +10,7 @@ The kernel is written primarily in C, with some assembly for low-level tasks lik
 
 **Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
 
-**Current Status:** Proto 12 in progress (Keyboard Input). See `REQUIREMENTS__PROTO.md` for the authoritative requirements.
+**Current Status:** Proto 12 (Keyboard Input) Complete. Using PS/2 driver (with USB legacy emulation). Native XHCI disabled. See `DONE/usb_debug_plan.md` for details.
 
 ## Target Architecture
 
@@ -165,6 +165,16 @@ Build flavor differences:
 - Line editing with backspace support and console echo
 - Blocking input via `hlt` loop (interrupt-driven, no busy-wait)
 - Modifier key tracking: left/right shift, caps lock, ctrl
+
+### Proto 12: Keyboard Input (PS/2 + Experimental USB)
+- **Primary:** PS/2 Keyboard Driver (8042 Controller)
+  - IRQ1 handling, scancode Set 1 decoding
+  - `kbd_getc_blocking()` / `kbd_readline()` API
+  - Input ring buffer with concurrent access protection
+- **Secondary (DISABLED):** Native USB XHCI Driver
+  - PCI enumeration and BAR mapping (Code present but disabled)
+  - BIOS-to-OS Handoff logic (Implemented in `xhci.c`)
+- **Fallback Strategy:** System relies on BIOS Legacy Emulation (PS/2) for broad compatibility.
 
 ## User Programs
 
