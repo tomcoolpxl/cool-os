@@ -7,6 +7,9 @@
 #define SYS_exit    0
 #define SYS_write   1
 #define SYS_yield   2
+#define SYS_wait    3
+#define SYS_getpid  4
+#define SYS_getppid 5
 
 /* Initialize SYSCALL/SYSRET mechanism */
 void syscall_init(void);

@@ -1,4 +1,3 @@
-````md
 # Prototype 15: Process Lifecycle, Parent/Child Model, and wait()
 
 ## Purpose
@@ -302,18 +301,3 @@ Prototype 15 is complete when:
 * Shell can run programs and wait for exit
 * System remains stable under repeated program launches
 
-## Next Prototype (Planned)
-
-Prototype 16: Per-Process Address Spaces
-
-Goals:
-
-* Separate page tables per process
-* Kernel mapped globally
-* User memory isolation
-* Preparation for fork()
-
-This is the major memory management milestone.
-
-```
-```

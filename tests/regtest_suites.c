@@ -1252,3 +1252,288 @@ int regtest_shell(void) {
     regtest_end_suite("shell");
     return 0;
 }
+
+/* ========== Libc Suite ========== */
+
+/*
+ * Libc Test Suite
+ *
+ * Tests the userland libc by executing hello.elf (a C program)
+ * and verifying it completes successfully.
+ */
+
+int regtest_libc(void) {
+    regtest_start_suite("libc");
+
+    /* Check if modules are available */
+    if (limine_modules == NULL || limine_modules->module_count == 0) {
+        regtest_log("NOTE: No modules loaded, skipping libc tests\n");
+        regtest_pass("libc_skip_no_modules");
+        regtest_end_suite("libc");
+        return 0;
+    }
+
+    /* Test 1: Find hello.elf module */
+    struct limine_file *hello_mod = find_module("hello.elf");
+    if (hello_mod == NULL) {
+        regtest_fail("libc_find_module", "hello.elf not found in modules");
+        regtest_end_suite("libc");
+        return -1;
+    }
+    regtest_pass("libc_find_module");
+
+    /* Test 2: Verify module has content */
+    if (hello_mod->size == 0 || hello_mod->address == NULL) {
+        regtest_fail("libc_module_valid", "hello.elf module is empty");
+        regtest_end_suite("libc");
+        return -1;
+    }
+    regtest_pass("libc_module_valid");
+
+    /* Test 3: Create task from hello.elf */
+    task_t *hello_task = task_create_elf(hello_mod->address, hello_mod->size);
+    if (hello_task == NULL) {
+        regtest_fail("libc_create_task", "task_create_elf returned NULL");
+        regtest_end_suite("libc");
+        return -1;
+    }
+    regtest_pass("libc_create_task");
+
+    /* Test 4: Execute hello.elf and verify it completes */
+    scheduler_add(hello_task);
+
+    /* Run until task finishes (with a safety limit) */
+    int iterations = 0;
+    while (hello_task->state != TASK_FINISHED && iterations < 10000) {
+        task_yield();
+        iterations++;
+    }
+
+    if (hello_task->state != TASK_FINISHED) {
+        regtest_fail("libc_exec", "hello.elf did not complete");
+        regtest_end_suite("libc");
+        return -1;
+    }
+
+    /* If we got here, the C program with libc executed successfully */
+    regtest_pass("libc_exec");
+
+    regtest_end_suite("libc");
+    return 0;
+}
+
+/* ========== Process Suite (Proto 15) ========== */
+
+/*
+ * Process Test Suite
+ *
+ * Tests the process lifecycle, parent-child relationships, exit codes,
+ * zombie state, and wait() syscall.
+ */
+
+/* Dummy function for kernel task tests */
+static volatile int process_test_ran = 0;
+static void process_dummy_fn(void) {
+    process_test_ran = 1;
+}
+
+/* Test task that exits with a specific code */
+static volatile int process_exit_code_test = 0;
+static void process_exit_42_fn(void) {
+    process_exit_code_test = 42;
+    /* Exit via task_exit with code 42 */
+    task_exit(42);
+}
+
+static void process_exit_0_fn(void) {
+    task_exit(0);
+}
+
+int regtest_process(void) {
+    regtest_start_suite("process");
+
+    /* Reset test variables */
+    process_test_ran = 0;
+    process_exit_code_test = 0;
+
+    /* Test 1: PID assignment - new tasks get unique PIDs */
+    task_t *t1 = task_create(process_dummy_fn);
+    if (t1 == NULL) {
+        regtest_fail("process_pid_assigned", "task_create returned NULL");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (t1->pid == 0) {
+        regtest_fail("process_pid_assigned", "PID should be non-zero");
+        regtest_end_suite("process");
+        return -1;
+    }
+    uint32_t pid1 = t1->pid;
+    regtest_pass("process_pid_assigned");
+
+    /* Test 2: Unique PIDs - second task gets different PID */
+    task_t *t2 = task_create(process_dummy_fn);
+    if (t2 == NULL || t2->pid == 0) {
+        regtest_fail("process_pid_unique", "task_create failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (t2->pid == pid1) {
+        regtest_fail("process_pid_unique", "PIDs should be unique");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_pid_unique");
+
+    /* Test 3: PPID correct - set parent and verify */
+    task_t *parent = task_current();
+    task_t *child = task_create(process_dummy_fn);
+    if (child == NULL) {
+        regtest_fail("process_ppid_correct", "task_create failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+    task_set_parent(child, parent);
+    if (child->ppid != parent->pid) {
+        regtest_fail("process_ppid_correct", "child PPID != parent PID");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (child->parent != parent) {
+        regtest_fail("process_ppid_correct", "child parent pointer wrong");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_ppid_correct");
+
+    /* Test 4: Parent's children list - child should be in parent's first_child */
+    if (parent->first_child != child) {
+        regtest_fail("process_children_list", "child not in parent's first_child");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_children_list");
+
+    /* Clean up test tasks from tests 1-4 by removing from parent's child list */
+    /* We never scheduled these, so just disconnect them from the parent */
+    parent->first_child = NULL;
+    child->parent = NULL;
+    child->ppid = 0;
+    /* t1 and t2 were never set as children of anyone */
+
+    /* Test 5: Exit code stored correctly */
+    task_t *exit_task = task_create(process_exit_42_fn);
+    if (exit_task == NULL) {
+        regtest_fail("process_exit_code", "task_create failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+    uint32_t exit_task_pid = exit_task->pid;  /* Save PID before wait may reap */
+    task_set_parent(exit_task, task_current());
+    scheduler_add(exit_task);
+
+    /* Run until task finishes */
+    int iterations = 0;
+    while (exit_task->state != PROC_ZOMBIE && iterations < 1000) {
+        task_yield();
+        iterations++;
+    }
+    if (exit_task->state != PROC_ZOMBIE) {
+        regtest_fail("process_exit_code", "task did not become zombie");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (exit_task->exit_code != 42) {
+        regtest_fail("process_exit_code", "exit code should be 42");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_exit_code");
+
+    /* Test 6: wait() returns immediately for zombie child */
+    int status = -1;
+    int wait_pid = task_wait(&status);
+    if (wait_pid != (int)exit_task_pid) {
+        regtest_fail("process_wait_zombie", "wait returned wrong PID");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (status != 42) {
+        regtest_fail("process_wait_zombie", "wait returned wrong status");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_wait_zombie");
+
+    /* Test 7: wait() with no children returns -1 */
+    int no_child_result = task_wait(NULL);
+    if (no_child_result != -1) {
+        regtest_fail("process_wait_no_children", "wait should return -1 with no children");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_wait_no_children");
+
+    /* Test 8: wait() blocks until child exits */
+    task_t *slow_child = task_create(process_exit_0_fn);
+    if (slow_child == NULL) {
+        regtest_fail("process_wait_blocks", "task_create failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+    task_set_parent(slow_child, task_current());
+    scheduler_add(slow_child);
+
+    /* Call wait() - should block until child exits, then return */
+    status = -1;
+    wait_pid = task_wait(&status);
+    if (wait_pid <= 0) {
+        regtest_fail("process_wait_blocks", "wait returned invalid PID");
+        regtest_end_suite("process");
+        return -1;
+    }
+    if (status != 0) {
+        regtest_fail("process_wait_blocks", "wait returned wrong status");
+        regtest_end_suite("process");
+        return -1;
+    }
+    regtest_pass("process_wait_blocks");
+
+    /* Test 9: Multiple children - can wait for multiple */
+    task_t *child1 = task_create(process_exit_0_fn);
+    task_t *child2 = task_create(process_exit_42_fn);
+    if (child1 == NULL || child2 == NULL) {
+        regtest_fail("process_multi_children", "task_create failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+    task_set_parent(child1, task_current());
+    task_set_parent(child2, task_current());
+    scheduler_add(child1);
+    scheduler_add(child2);
+
+    /* Wait for first child */
+    int pid1_wait = task_wait(&status);
+    if (pid1_wait <= 0) {
+        regtest_fail("process_multi_children", "first wait failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+
+    /* Wait for second child */
+    int pid2_wait = task_wait(&status);
+    if (pid2_wait <= 0) {
+        regtest_fail("process_multi_children", "second wait failed");
+        regtest_end_suite("process");
+        return -1;
+    }
+
+    /* Both waits succeeded */
+    regtest_pass("process_multi_children");
+
+    /* Clean up any remaining test tasks (t1, t2, child are not scheduled/reaped) */
+    /* These are orphan kernel tasks that won't be reaped normally */
+
+    regtest_end_suite("process");
+    return 0;
+}

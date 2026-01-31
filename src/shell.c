@@ -239,9 +239,27 @@ static int cmd_run(int argc, char **argv) {
         return SHELL_ERR_FILE;
     }
 
-    console_puts("Started: ");
+    /* Set shell as parent so we can wait for child */
+    task_set_parent(task, task_current());
+    scheduler_add(task);
+
+    console_puts("Running: ");
     console_puts(upper_name);
     console_puts("\n");
+    fb_present();  /* Show "Running" message immediately */
+
+    /* Wait for child to complete (blocking) */
+    int status;
+    int pid = task_wait(&status);
+
+    if (pid > 0) {
+        console_puts("Process ");
+        console_print_dec(pid);
+        console_puts(" exited with code ");
+        console_print_dec(status);
+        console_puts("\n");
+    }
+
     return SHELL_OK;
 }
 

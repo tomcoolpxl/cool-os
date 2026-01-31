@@ -36,7 +36,7 @@ void scheduler_init(void) {
     ASSERT(bootstrap != NULL);
     bootstrap->rsp = 0;  /* Will be saved on first yield */
     bootstrap->next = NULL;
-    bootstrap->state = TASK_RUNNING;
+    bootstrap->state = PROC_RUNNING;
     bootstrap->stack_base = NULL;  /* Using Limine-provided stack */
     bootstrap->id = 0;
     bootstrap->entry = NULL;
@@ -46,6 +46,13 @@ void scheduler_init(void) {
     bootstrap->user_rip = 0;
     bootstrap->is_user = 0;
     bootstrap->user_stack_base = NULL;
+    /* Initialize process lifecycle fields (bootstrap is PID 0) */
+    bootstrap->pid = 0;
+    bootstrap->ppid = 0;
+    bootstrap->parent = NULL;
+    bootstrap->exit_code = 0;
+    bootstrap->first_child = NULL;
+    bootstrap->next_sibling = NULL;
 
     current_task = bootstrap;
 
@@ -87,26 +94,26 @@ void scheduler_yield(void) {
     task_t *old = current_task;
     task_t *next = old->next;
 
-    /* Skip FINISHED tasks, but always allow idle_task */
-    while (next->state == TASK_FINISHED && next != idle_task) {
+    /* Skip ZOMBIE and BLOCKED tasks, but always allow idle_task */
+    while ((next->state == PROC_ZOMBIE || next->state == PROC_BLOCKED) && next != idle_task) {
         next = next->next;
-        /* Safety: don't loop forever if all tasks are finished */
+        /* Safety: don't loop forever if no runnable tasks */
         if (next == old->next) {
             next = idle_task;
             break;
         }
     }
 
-    /* If only finished tasks remain (except idle), switch to idle */
-    if (next->state == TASK_FINISHED) {
+    /* If only zombie/blocked tasks remain (except idle), switch to idle */
+    if (next->state == PROC_ZOMBIE || next->state == PROC_BLOCKED) {
         next = idle_task;
     }
 
     /* Update states */
-    if (old->state == TASK_RUNNING) {
-        old->state = TASK_READY;
+    if (old->state == PROC_RUNNING) {
+        old->state = PROC_READY;
     }
-    next->state = TASK_RUNNING;
+    next->state = PROC_RUNNING;
     current_task = next;
 
     /* Perform context switch if switching to different task */

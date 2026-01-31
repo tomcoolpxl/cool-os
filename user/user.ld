@@ -34,5 +34,17 @@ SECTIONS
         *(.comment)
         *(.note.*)
         *(.eh_frame*)
+        *(.interp)
+        *(.dynsym)
+        *(.dynstr)
+        *(.hash)
+        *(.gnu.hash)
+        *(.rela.dyn)
+        *(.rela.plt)
+        *(.dynamic)
+        *(.plt)
+        *(.plt.got)
+        *(.got)
+        *(.got.plt)
     }
 }

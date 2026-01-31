@@ -10,7 +10,7 @@ The kernel is written primarily in C, with some assembly for low-level tasks lik
 
 **Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
 
-**Current Status:** Proto 13 (Kernel Shell) Complete. Interactive shell with keyboard input via PS/2 (USB legacy emulation). Shell includes test API for automated regression testing.
+**Current Status:** Proto 15 (Process Lifecycle) Complete. Parent-child relationships, exit codes, zombie state, and blocking wait() syscall.
 
 ## Target Architecture
 
@@ -61,7 +61,7 @@ Build flavor differences:
 - `build/dist/user/*.elf` - User program ELF files
 - `build/obj/<flavor>/` - Object files per flavor
 
-## Implemented Features (Proto 1-12)
+## Implemented Features (Proto 1-15)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -204,14 +204,56 @@ Build flavor differences:
   - `shell_parse_line()`: Parse command line into argc/argv
 - Return codes: `SHELL_OK`, `SHELL_ERR_EMPTY`, `SHELL_ERR_UNKNOWN`, `SHELL_ERR_ARGS`, `SHELL_ERR_FILE`
 
+### Proto 14: Userland stdio & Minimal libc
+- Minimal C runtime (crt0) for user programs
+- Assembly syscall wrappers: `_syscall0`, `_syscall1`, `_syscall3`
+- C syscall wrappers: `exit()`, `write()`, `yield()`
+- stdio functions: `printf()`, `puts()`, `putchar()`
+- String functions: `strlen()`, `strcpy()`, `strcmp()`, `strncmp()`, `memcpy()`, `memset()`
+- Static bump allocator: `malloc()`, `free()`, `calloc()`, `realloc()`
+- printf format specifiers: `%s`, `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, `%c`, `%%`
+- User headers: `stdint.h`, `stddef.h`, `stdarg.h`, `string.h`, `stdio.h`, `stdlib.h`, `unistd.h`
+- 64KB static heap for user programs
+- C user programs link with libc automatically
+
+### Proto 15: Process Lifecycle
+- Process states: `PROC_READY`, `PROC_RUNNING`, `PROC_BLOCKED`, `PROC_ZOMBIE`
+- Unique PIDs for all tasks (monotonically increasing)
+- Parent-child relationships via `task_set_parent()`
+- Exit codes stored in task struct, valid in PROC_ZOMBIE state
+- `task_exit(code)` function for kernel-level exit with cleanup
+- `task_wait(&status)` blocks until child exits, returns child PID
+- Zombie reaping with `task_reap()` frees kernel stack and task struct
+- Orphan handling: children's parent pointer cleared when parent exits
+- System calls: `SYS_wait`, `SYS_getpid`, `SYS_getppid`
+- User-space wrappers: `wait()`, `getpid()`, `getppid()`
+- Shell foreground execution: `run` command waits for child to complete
+- Scheduler skips PROC_BLOCKED and PROC_ZOMBIE tasks
+
 ## User Programs
 
 User programs are in `user/` directory:
+
+**Assembly programs** (raw syscalls):
 - `init.S` - Hello world (prints message, exits)
 - `yield1.S` / `yield2.S` - Yield test (alternating output)
 - `fault.S` - Privilege separation test (jumps to kernel address)
 
-Build: User programs compiled to ELF64 via `user/user.ld`, included as Limine modules.
+**C programs** (linked with libc):
+- `hello.c` - Demonstrates printf, strlen, malloc
+
+**Libc** (`user/libc/`):
+- `crt0.S` - C runtime entry point
+- `syscall.S` - Low-level syscall wrappers
+- `syscalls.c` - C syscall wrappers (exit, write, yield, wait, getpid, getppid)
+- `stdio.c` - printf, puts, putchar
+- `string.c` - String/memory functions
+- `malloc.c` - Static bump allocator
+
+**Headers** (`user/include/`):
+- `stdint.h`, `stddef.h`, `stdarg.h`, `string.h`, `stdio.h`, `stdlib.h`, `unistd.h`
+
+Build: Assembly programs compiled directly. C programs link with libc via `user/user.ld`.
 
 ## Source Structure
 
@@ -276,12 +318,28 @@ src/
   vfs.c         - VFS layer implementation
 
 user/
-  init.S      - Hello world user program
-  yield1.S    - Yield test program 1
-  yield2.S    - Yield test program 2
-  fault.S     - Privilege separation test
-  user.ld     - Linker script for user programs
-prototype13.md prototype14.md prototype15.md prototype16.md prototype17.md prototype18.md prototype19.md prototype20.md prototype21.md prototype22.md prototype23.md prototype24.md prototype25.md prototype26.md prototype27.md prototype28.md prototype29.md prototype30.md prototype31.md prototype32.md prototype33.md prototype34.md prototype35.md prototype36.md prototype37.md prototype38.md prototype39.md prototype40.md
+  init.S        - Hello world user program (asm)
+  yield1.S      - Yield test program 1 (asm)
+  yield2.S      - Yield test program 2 (asm)
+  fault.S       - Privilege separation test (asm)
+  hello.c       - C user program demo
+  user.ld       - Linker script for user programs
+  libc/
+    crt0.S      - C runtime entry point
+    syscall.S   - Low-level syscall wrappers
+    syscalls.c  - C syscall wrappers
+    stdio.c     - printf, puts, putchar
+    string.c    - String/memory functions
+    malloc.c    - Static bump allocator
+  include/
+    stdint.h    - Integer types
+    stddef.h    - size_t, NULL, offsetof
+    stdarg.h    - Variadic macros (va_list)
+    string.h    - String function declarations
+    stdio.h     - I/O function declarations
+    stdlib.h    - malloc, free, exit declarations
+    unistd.h    - POSIX-like syscall wrappers
+
 tests/
   kernel_tests.c   - Interactive test suite (included in test flavor via TEST_BUILD)
   regtest_suites.c - Automated regression test suites (included in regtest flavor)
@@ -343,6 +401,8 @@ echo $?             # 0 = pass, 1 = fail
 | `console` | Text Console: init, putc, puts, scroll |
 | `kbd` | Keyboard: injection, readline, backspace editing |
 | `shell` | Shell: command parsing, dispatch, error handling |
+| `libc` | Libc: C user program execution with libc |
+| `process` | Process Lifecycle: PID, parent-child, exit codes, wait, zombie reaping |
 
 ### Exit Codes
 

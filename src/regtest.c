@@ -210,6 +210,14 @@ int regtest_run_all(void) {
     if (regtest_shell() != 0) result = -1;
 #endif
 
+#ifdef REGTEST_LIBC
+    if (regtest_libc() != 0) result = -1;
+#endif
+
+#ifdef REGTEST_PROCESS
+    if (regtest_process() != 0) result = -1;
+#endif
+
     regtest_log("SUMMARY total=%d passed=%d failed=%d\n",
                 total_passed + total_failed, total_passed, total_failed);
 

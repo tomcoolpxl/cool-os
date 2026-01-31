@@ -33,18 +33,26 @@ STRIP := strip
 C_SRCS := $(wildcard src/*.c)
 ASM_SRCS := $(wildcard src/*.S)
 TEST_C_SRCS := $(wildcard tests/*.c)
-USER_SRCS := $(wildcard user/*.S)
+USER_ASM_SRCS := $(wildcard user/*.S)
+USER_C_SRCS := $(wildcard user/*.c)
+
+# Libc source files
+LIBC_ASM_SRCS := $(wildcard user/libc/*.S)
+LIBC_C_SRCS := $(wildcard user/libc/*.c)
 
 # Build directories
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj/$(FLAVOR)
 USER_OBJ_DIR := $(BUILD_DIR)/user_obj
+LIBC_OBJ_DIR := $(BUILD_DIR)/libc_obj
 DIST_DIR := $(BUILD_DIR)/dist
 
 # Output files
 KERNEL_ELF := $(DIST_DIR)/kernel-$(FLAVOR).elf
 OS_IMG := $(DIST_DIR)/cool-os-$(FLAVOR).img
-USER_ELFS := $(patsubst user/%.S,$(DIST_DIR)/user/%.elf,$(USER_SRCS))
+USER_ASM_ELFS := $(patsubst user/%.S,$(DIST_DIR)/user/%.elf,$(USER_ASM_SRCS))
+USER_C_ELFS := $(patsubst user/%.c,$(DIST_DIR)/user/%.elf,$(USER_C_SRCS))
+USER_ELFS := $(USER_ASM_ELFS) $(USER_C_ELFS)
 
 # --- 2. Build Flavors ---
 
@@ -77,7 +85,11 @@ endif
 C_OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(C_SRCS))
 ASM_OBJS := $(patsubst src/%.S,$(OBJ_DIR)/%.o,$(ASM_SRCS))
 TEST_OBJS := $(patsubst tests/%.c,$(OBJ_DIR)/%.o,$(TEST_C_SRCS))
-USER_OBJS := $(patsubst user/%.S,$(USER_OBJ_DIR)/%.o,$(USER_SRCS))
+USER_ASM_OBJS := $(patsubst user/%.S,$(USER_OBJ_DIR)/%.o,$(USER_ASM_SRCS))
+USER_C_OBJS := $(patsubst user/%.c,$(USER_OBJ_DIR)/%.o,$(USER_C_SRCS))
+LIBC_ASM_OBJS := $(patsubst user/libc/%.S,$(LIBC_OBJ_DIR)/%.o,$(LIBC_ASM_SRCS))
+LIBC_C_OBJS := $(patsubst user/libc/%.c,$(LIBC_OBJ_DIR)/%.o,$(LIBC_C_SRCS))
+LIBC_OBJS := $(LIBC_ASM_OBJS) $(LIBC_C_OBJS)
 
 # Regtest source files
 REGTEST_C_SRCS := $(wildcard tests/regtest_suites.c)
@@ -135,14 +147,35 @@ $(OBJ_DIR)/%.o: tests/%.c
 	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# User programs
-$(DIST_DIR)/user/%.elf: $(USER_OBJ_DIR)/%.o user/user.ld
-	@mkdir -p $(DIST_DIR)/user
-	$(LD) -nostdlib -static -T user/user.ld -o $@ $<
+# Libc assembly
+$(LIBC_OBJ_DIR)/%.o: user/libc/%.S
+	@mkdir -p $(LIBC_OBJ_DIR)
+	$(AS) -ffreestanding -fno-pic -c $< -o $@
 
+# Libc C (position-independent for relocation support)
+$(LIBC_OBJ_DIR)/%.o: user/libc/%.c
+	@mkdir -p $(LIBC_OBJ_DIR)
+	$(CC) -ffreestanding -nostdlib -fpie -fno-stack-protector -mno-red-zone -I user/include -c $< -o $@
+
+# User assembly programs - compile
 $(USER_OBJ_DIR)/%.o: user/%.S
 	@mkdir -p $(USER_OBJ_DIR)
 	$(AS) -ffreestanding -fno-pic -c $< -o $@
+
+# User C programs - compile (position-independent for relocation support)
+$(USER_OBJ_DIR)/%.o: user/%.c
+	@mkdir -p $(USER_OBJ_DIR)
+	$(CC) -ffreestanding -nostdlib -fpie -fno-stack-protector -mno-red-zone -I user/include -c $< -o $@
+
+# User assembly programs - link (static pattern rule)
+$(USER_ASM_ELFS): $(DIST_DIR)/user/%.elf: $(USER_OBJ_DIR)/%.o user/user.ld
+	@mkdir -p $(DIST_DIR)/user
+	$(LD) -nostdlib -static -T user/user.ld -o $@ $<
+
+# User C programs - link with libc (static pattern rule)
+$(USER_C_ELFS): $(DIST_DIR)/user/%.elf: $(USER_OBJ_DIR)/%.o $(LIBC_OBJS) user/user.ld
+	@mkdir -p $(DIST_DIR)/user
+	$(LD) -nostdlib -static -T user/user.ld -o $@ $(LIBC_OBJ_DIR)/crt0.o $< $(filter-out $(LIBC_OBJ_DIR)/crt0.o,$(LIBC_OBJS))
 
 # --- 5. Image and QEMU ---
 

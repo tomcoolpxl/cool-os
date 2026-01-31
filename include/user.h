@@ -48,4 +48,37 @@ static inline void user_yield(void) {
     );
 }
 
+static inline int user_wait(int *status) {
+    int ret;
+    asm volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(SYS_wait), "D"(status)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline uint32_t user_getpid(void) {
+    uint32_t ret;
+    asm volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(SYS_getpid)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline uint32_t user_getppid(void) {
+    uint32_t ret;
+    asm volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(SYS_getppid)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
 #endif

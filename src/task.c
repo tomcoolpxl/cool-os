@@ -17,6 +17,9 @@ static uint64_t next_task_id = 0;
 /* Counter for unique user virtual address allocation per task */
 static uint64_t next_user_slot = 0;
 
+/* PID counter - starts at 1 (PID 0 reserved for kernel) */
+static uint32_t next_pid = 1;
+
 /* Current task pointer - exported for scheduler */
 task_t *current_task = NULL;
 
@@ -36,7 +39,7 @@ task_t *task_create(void (*entry)(void)) {
 
     task->stack_base = stack_base;
     task->entry = entry;
-    task->state = TASK_READY;
+    task->state = PROC_READY;
     task->id = next_task_id++;
     task->next = NULL;
 
@@ -46,6 +49,14 @@ task_t *task_create(void (*entry)(void)) {
     task->user_rip = 0;
     task->is_user = 0;
     task->user_stack_base = NULL;
+
+    /* Initialize process lifecycle fields */
+    task->pid = next_pid++;
+    task->ppid = 0;                /* Kernel tasks have no parent */
+    task->parent = NULL;
+    task->exit_code = 0;
+    task->first_child = NULL;
+    task->next_sibling = NULL;
 
     /*
      * Set up initial stack frame for context_switch.
@@ -196,7 +207,7 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
 
     task->stack_base = kernel_stack_base;
     task->entry = NULL;  /* Not used for user tasks */
-    task->state = TASK_READY;
+    task->state = PROC_READY;
     task->id = next_task_id++;
     task->next = NULL;
 
@@ -208,6 +219,14 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     task->user_rsp = user_stack_vaddr + TASK_STACK_SIZE;
     /* Kernel stack top for syscalls/interrupts */
     task->kernel_rsp = (uint64_t)kernel_stack_base + TASK_STACK_SIZE;
+
+    /* Initialize process lifecycle fields */
+    task->pid = next_pid++;
+    task->ppid = current_task ? current_task->pid : 0;
+    task->parent = NULL;  /* Not tracked for task_create_user */
+    task->exit_code = 0;
+    task->first_child = NULL;
+    task->next_sibling = NULL;
 
     /*
      * Set up kernel stack frame for context_switch.
@@ -308,7 +327,7 @@ task_t *task_create_elf(const void *data, uint64_t size) {
     /* Initialize task struct */
     task->stack_base = kernel_stack_base;
     task->entry = NULL;  /* Not used for user tasks */
-    task->state = TASK_READY;
+    task->state = PROC_READY;
     task->id = next_task_id++;
     task->next = NULL;
 
@@ -326,6 +345,14 @@ task_t *task_create_elf(const void *data, uint64_t size) {
 
     /* Kernel stack top for syscalls/interrupts */
     task->kernel_rsp = (uint64_t)kernel_stack_base + TASK_STACK_SIZE;
+
+    /* Initialize process lifecycle fields */
+    task->pid = next_pid++;
+    task->ppid = current_task ? current_task->pid : 0;
+    task->parent = NULL;  /* Set via task_set_parent if needed */
+    task->exit_code = 0;
+    task->first_child = NULL;
+    task->next_sibling = NULL;
 
     /*
      * Set up kernel stack frame for context_switch.
@@ -400,4 +427,244 @@ task_t *task_create_from_path(const char *path) {
     kfree(buf);
 
     return task;
+}
+
+/*
+ * Process lifecycle functions (Proto 15)
+ */
+
+uint32_t task_getpid(void) {
+    return current_task ? current_task->pid : 0;
+}
+
+uint32_t task_getppid(void) {
+    return current_task ? current_task->ppid : 0;
+}
+
+/*
+ * Set parent-child relationship between tasks.
+ * Adds child to parent's children list.
+ */
+void task_set_parent(task_t *child, task_t *parent) {
+    if (child == NULL) return;
+
+    child->parent = parent;
+    child->ppid = parent ? parent->pid : 0;
+
+    if (parent != NULL) {
+        /* Add to parent's children list at head */
+        child->next_sibling = parent->first_child;
+        parent->first_child = child;
+    }
+}
+
+/*
+ * Find task by PID.
+ * Linear scan of scheduler queue. Returns NULL if not found.
+ */
+task_t *task_find_by_pid(uint32_t pid) {
+    if (current_task == NULL || pid == 0) return NULL;
+
+    task_t *t = current_task;
+    do {
+        if (t->pid == pid) return t;
+        t = t->next;
+    } while (t != current_task);
+
+    return NULL;
+}
+
+/*
+ * Remove a child from parent's children list.
+ */
+static void remove_from_children_list(task_t *child, task_t *parent) {
+    if (parent == NULL || child == NULL) return;
+
+    if (parent->first_child == child) {
+        parent->first_child = child->next_sibling;
+    } else {
+        task_t *prev = parent->first_child;
+        while (prev != NULL && prev->next_sibling != child) {
+            prev = prev->next_sibling;
+        }
+        if (prev != NULL) {
+            prev->next_sibling = child->next_sibling;
+        }
+    }
+    child->next_sibling = NULL;
+}
+
+/*
+ * Remove task from scheduler queue.
+ */
+static void remove_from_scheduler(task_t *task) {
+    if (current_task == NULL || task == NULL) return;
+
+    /* Find predecessor in circular queue */
+    task_t *prev = current_task;
+    while (prev->next != task && prev->next != current_task) {
+        prev = prev->next;
+    }
+
+    if (prev->next == task) {
+        prev->next = task->next;
+    }
+}
+
+/*
+ * Reap a zombie task - free its resources.
+ * Called after wait() collects the exit code.
+ */
+void task_reap(task_t *zombie) {
+    if (zombie == NULL) return;
+
+    serial_puts("task_reap: Reaping PID ");
+    /* Simple decimal print */
+    char buf[16];
+    int i = 0;
+    uint32_t n = zombie->pid;
+    if (n == 0) {
+        buf[i++] = '0';
+    } else {
+        char tmp[16];
+        int j = 0;
+        while (n > 0) {
+            tmp[j++] = '0' + (n % 10);
+            n /= 10;
+        }
+        while (j > 0) {
+            buf[i++] = tmp[--j];
+        }
+    }
+    buf[i] = '\0';
+    serial_puts(buf);
+    serial_puts("\n");
+
+    /* Remove from parent's children list */
+    remove_from_children_list(zombie, zombie->parent);
+
+    /* Remove from scheduler queue */
+    remove_from_scheduler(zombie);
+
+    /* Free kernel stack */
+    if (zombie->stack_base != NULL) {
+        uint64_t stack_phys = hhdm_to_phys(zombie->stack_base);
+        pmm_free_frame(stack_phys);
+    }
+
+    /* Free task struct */
+    kfree(zombie);
+}
+
+/*
+ * Wait for any child to exit.
+ * Returns child PID on success, -1 if no children.
+ * Stores exit code in *status if non-NULL.
+ */
+int task_wait(int *status) {
+    task_t *current = task_current();
+    if (current == NULL) return -1;
+
+    /* Check if we have any children at all */
+    if (current->first_child == NULL) {
+        return -1;  /* No children */
+    }
+
+retry:
+    /* Look for zombie child */
+    for (task_t *child = current->first_child; child != NULL; child = child->next_sibling) {
+        if (child->state == PROC_ZOMBIE) {
+            /* Found zombie - collect exit code and reap */
+            int code = child->exit_code;
+            uint32_t pid = child->pid;
+
+            if (status != NULL) {
+                *status = code;
+            }
+
+            task_reap(child);
+            return (int)pid;
+        }
+    }
+
+    /* No zombie yet - block until one exits */
+    current->state = PROC_BLOCKED;
+    scheduler_yield();
+
+    /* Woken by child exit - retry to find and reap */
+    goto retry;
+}
+
+/*
+ * Exit current task with exit code.
+ * Transitions to PROC_ZOMBIE and wakes parent if blocked.
+ */
+void task_exit(int code) {
+    task_t *current = task_current();
+    if (current == NULL) return;
+
+    serial_puts("task_exit: PID ");
+    char buf[16];
+    int i = 0;
+    uint32_t n = current->pid;
+    if (n == 0) {
+        buf[i++] = '0';
+    } else {
+        char tmp[16];
+        int j = 0;
+        while (n > 0) {
+            tmp[j++] = '0' + (n % 10);
+            n /= 10;
+        }
+        while (j > 0) {
+            buf[i++] = tmp[--j];
+        }
+    }
+    buf[i] = '\0';
+    serial_puts(buf);
+    serial_puts(" exiting with code ");
+
+    i = 0;
+    int val = code;
+    if (val < 0) {
+        buf[i++] = '-';
+        val = -val;
+    }
+    if (val == 0) {
+        buf[i++] = '0';
+    } else {
+        char tmp[16];
+        int j = 0;
+        while (val > 0) {
+            tmp[j++] = '0' + (val % 10);
+            val /= 10;
+        }
+        while (j > 0) {
+            buf[i++] = tmp[--j];
+        }
+    }
+    buf[i] = '\0';
+    serial_puts(buf);
+    serial_puts("\n");
+
+    /* Store exit code */
+    current->exit_code = code;
+
+    /* Orphan any children - set their parent to NULL */
+    for (task_t *child = current->first_child; child != NULL; child = child->next_sibling) {
+        child->parent = NULL;
+        child->ppid = 0;
+    }
+    current->first_child = NULL;
+
+    /* Transition to zombie state */
+    current->state = PROC_ZOMBIE;
+
+    /* Wake parent if blocked (waiting for us) */
+    if (current->parent != NULL && current->parent->state == PROC_BLOCKED) {
+        current->parent->state = PROC_READY;
+    }
+
+    /* Yield to scheduler - we won't run again */
+    scheduler_yield();
 }

@@ -46,9 +46,7 @@ void syscall_init(void) {
 
 /* Syscall: exit(code) - terminate the current task */
 static void sys_exit(uint64_t code) {
-    (void)code;  /* Exit code not used currently */
-    task_current()->state = TASK_FINISHED;
-    scheduler_yield();
+    task_exit((int)code);
     /* Should not return */
 }
 
@@ -70,9 +68,33 @@ static void sys_yield(void) {
     scheduler_yield();
 }
 
-uint64_t syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    (void)arg3;  /* Currently unused */
+/* Syscall: wait(status) - wait for child to exit */
+static int64_t sys_wait(uint64_t status_ptr) {
+    int status;
+    int pid = task_wait(&status);
 
+    /* Copy status to user space if pointer valid */
+    if (pid > 0 && status_ptr != 0) {
+        /* Validate user pointer is in user address range */
+        if (status_ptr < 0x800000000000ULL) {  /* Low canonical half */
+            *(int *)status_ptr = status;
+        }
+    }
+
+    return pid;
+}
+
+/* Syscall: getpid() - get current process ID */
+static uint64_t sys_getpid(void) {
+    return task_getpid();
+}
+
+/* Syscall: getppid() - get parent process ID */
+static uint64_t sys_getppid(void) {
+    return task_getppid();
+}
+
+uint64_t syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
     switch (num) {
         case SYS_exit:
             sys_exit(arg1);
@@ -84,6 +106,15 @@ uint64_t syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t a
         case SYS_yield:
             sys_yield();
             return 0;
+
+        case SYS_wait:
+            return (uint64_t)sys_wait(arg1);
+
+        case SYS_getpid:
+            return sys_getpid();
+
+        case SYS_getppid:
+            return sys_getppid();
 
         default:
             /* Unknown syscall */

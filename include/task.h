@@ -3,16 +3,25 @@
 
 #include <stdint.h>
 
-#define TASK_RUNNING   0
-#define TASK_READY     1
-#define TASK_FINISHED  2
+/* Process states */
+typedef enum {
+    PROC_READY,      /* Ready to run */
+    PROC_RUNNING,    /* Currently executing */
+    PROC_BLOCKED,    /* Waiting for event (e.g., child exit) */
+    PROC_ZOMBIE      /* Exited, waiting to be reaped */
+} proc_state_t;
+
+/* Legacy state aliases for compatibility */
+#define TASK_RUNNING   PROC_RUNNING
+#define TASK_READY     PROC_READY
+#define TASK_FINISHED  PROC_ZOMBIE
 
 #define TASK_STACK_SIZE  4096  /* 4 KiB per task (1 PMM frame) */
 
 typedef struct task {
     uint64_t rsp;           /* Saved stack pointer - MUST be at offset 0 */
     struct task *next;      /* Next in scheduler queue (circular) */
-    int state;              /* TASK_RUNNING/READY/FINISHED */
+    proc_state_t state;     /* Process state */
     void *stack_base;       /* Stack allocation base (kernel stack) */
     uint64_t id;            /* Task ID for debugging */
     void (*entry)(void);    /* Entry point function */
@@ -22,6 +31,14 @@ typedef struct task {
     uint64_t user_rip;      /* offset 64: User entry point */
     int is_user;            /* offset 72: 1 if user mode task */
     void *user_stack_base;  /* offset 80: User stack allocation base */
+
+    /* Process lifecycle fields (Proto 15) */
+    uint32_t pid;           /* Process ID (unique, non-zero) */
+    uint32_t ppid;          /* Parent process ID (0 if no parent) */
+    struct task *parent;    /* Parent task pointer (for wakeup on exit) */
+    int exit_code;          /* Exit status (valid in PROC_ZOMBIE state) */
+    struct task *first_child;   /* Head of children list */
+    struct task *next_sibling;  /* Next sibling in parent's child list */
 } task_t;
 
 task_t *task_create(void (*entry)(void));
@@ -60,5 +77,14 @@ task_t *task_create_from_path(const char *path);
 
 void task_yield(void);
 task_t *task_current(void);
+
+/* Process lifecycle API (Proto 15) */
+uint32_t task_getpid(void);
+uint32_t task_getppid(void);
+int task_wait(int *status);           /* Wait for any child to exit */
+void task_set_parent(task_t *child, task_t *parent);
+task_t *task_find_by_pid(uint32_t pid);
+void task_reap(task_t *zombie);       /* Free zombie task resources */
+void task_exit(int code);             /* Exit current task with code */
 
 #endif
