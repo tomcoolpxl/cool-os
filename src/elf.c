@@ -6,6 +6,8 @@
 #include "panic.h"
 #include <stddef.h>
 
+/* For paging_map_user_page_in */
+
 /* User address space limits */
 #define USER_ADDR_MIN   0x10000ULL          /* Minimum user address (leave null page unmapped) */
 #define USER_ADDR_MAX   0x7FFFFFFFFFFFULL   /* Maximum user address (end of low canonical) */
@@ -248,6 +250,162 @@ int elf_load(const void *data, uint64_t size, elf_info_t *info) {
     }
 
     serial_puts("ELF: Loaded successfully, range ");
+    print_hex(info->load_base);
+    serial_puts(" - ");
+    print_hex(info->load_end);
+    serial_puts("\n");
+
+    return 0;
+}
+
+int elf_load_into(const void *data, uint64_t size, uint64_t *pml4, elf_info_t *info) {
+    if (data == NULL || size < sizeof(Elf64_Ehdr) || info == NULL || pml4 == NULL) {
+        serial_puts("ELF: Invalid parameters\n");
+        return -1;
+    }
+
+    const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)data;
+
+    /* Validate header */
+    if (elf_validate_header(ehdr, size) != 0) {
+        return -1;
+    }
+
+    serial_puts("ELF: Loading executable into address space, entry ");
+    print_hex(ehdr->e_entry);
+    serial_puts("\n");
+
+    /* Initialize load bounds */
+    info->entry = ehdr->e_entry;
+    info->load_base = ~0ULL;
+    info->load_end = 0;
+
+    const uint8_t *file_data = (const uint8_t *)data;
+
+    /* First pass: validate all segments and calculate bounds */
+    int has_load = 0;
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const Elf64_Phdr *phdr = (const Elf64_Phdr *)(file_data + ehdr->e_phoff + i * ehdr->e_phentsize);
+
+        if (phdr->p_type != PT_LOAD) {
+            continue;
+        }
+
+        if (phdr->p_memsz == 0) {
+            continue;
+        }
+
+        has_load = 1;
+
+        if (elf_validate_segment(phdr) != 0) {
+            return -1;
+        }
+
+        /* Check file bounds */
+        if (phdr->p_offset + phdr->p_filesz > size) {
+            serial_puts("ELF: Segment file data extends past file end\n");
+            return -1;
+        }
+
+        /* Update bounds */
+        if (phdr->p_vaddr < info->load_base) {
+            info->load_base = phdr->p_vaddr;
+        }
+        uint64_t seg_end = phdr->p_vaddr + phdr->p_memsz;
+        if (seg_end > info->load_end) {
+            info->load_end = seg_end;
+        }
+    }
+
+    if (!has_load) {
+        serial_puts("ELF: No PT_LOAD segments\n");
+        return -1;
+    }
+
+    /* Validate entry point is within loaded range */
+    if (info->entry < info->load_base || info->entry >= info->load_end) {
+        serial_puts("ELF: Entry point outside loaded segments\n");
+        return -1;
+    }
+
+    /* Second pass: map and load segments into the specified PML4 */
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const Elf64_Phdr *phdr = (const Elf64_Phdr *)(file_data + ehdr->e_phoff + i * ehdr->e_phentsize);
+
+        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) {
+            continue;
+        }
+
+        /* Determine page permissions from p_flags */
+        int writable = (phdr->p_flags & PF_W) ? 1 : 0;
+        int executable = (phdr->p_flags & PF_X) ? 1 : 0;
+
+        serial_puts("ELF: Loading segment at ");
+        print_hex(phdr->p_vaddr);
+        serial_puts(" size ");
+        print_hex(phdr->p_memsz);
+        serial_puts(" flags ");
+        if (phdr->p_flags & PF_R) serial_putc('R');
+        if (phdr->p_flags & PF_W) serial_putc('W');
+        if (phdr->p_flags & PF_X) serial_putc('X');
+        serial_puts("\n");
+
+        /* Align start address down to page boundary */
+        uint64_t page_start = phdr->p_vaddr & ~0xFFFULL;
+        uint64_t page_end = (phdr->p_vaddr + phdr->p_memsz + 0xFFF) & ~0xFFFULL;
+
+        /* Map pages into the specified PML4 */
+        for (uint64_t vaddr = page_start; vaddr < page_end; vaddr += 0x1000) {
+            /* Allocate physical frame */
+            uint64_t paddr = pmm_alloc_frame();
+            if (paddr == 0) {
+                serial_puts("ELF: Out of physical memory\n");
+                return -1;
+            }
+
+            /* Zero the frame first */
+            uint8_t *frame_ptr = (uint8_t *)phys_to_hhdm(paddr);
+            for (int j = 0; j < 4096; j++) {
+                frame_ptr[j] = 0;
+            }
+
+            /* Map with user permissions into the specified PML4 */
+            if (paging_map_user_page_in(pml4, vaddr, paddr, writable, executable) != 0) {
+                serial_puts("ELF: Failed to map page\n");
+                return -1;
+            }
+
+            /* Copy file data if this page contains any */
+            uint64_t file_start = phdr->p_vaddr;
+            uint64_t file_end = phdr->p_vaddr + phdr->p_filesz;
+
+            /* Calculate overlap between this page and file data */
+            uint64_t copy_start = vaddr;
+            if (copy_start < file_start) {
+                copy_start = file_start;
+            }
+            uint64_t copy_end = vaddr + 0x1000;
+            if (copy_end > file_end) {
+                copy_end = file_end;
+            }
+
+            if (copy_start < copy_end) {
+                /* There's data to copy */
+                uint64_t page_offset = copy_start - vaddr;
+                uint64_t file_offset = phdr->p_offset + (copy_start - phdr->p_vaddr);
+                uint64_t copy_len = copy_end - copy_start;
+
+                const uint8_t *src = file_data + file_offset;
+                uint8_t *dst = frame_ptr + page_offset;
+
+                for (uint64_t k = 0; k < copy_len; k++) {
+                    dst[k] = src[k];
+                }
+            }
+        }
+    }
+
+    serial_puts("ELF: Loaded into address space, range ");
     print_hex(info->load_base);
     serial_puts(" - ");
     print_hex(info->load_end);

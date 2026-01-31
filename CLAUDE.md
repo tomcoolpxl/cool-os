@@ -10,7 +10,7 @@ The kernel is written primarily in C, with some assembly for low-level tasks lik
 
 **Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
 
-**Current Status:** Proto 15 (Process Lifecycle) Complete. Parent-child relationships, exit codes, zombie state, and blocking wait() syscall.
+**Current Status:** Proto 16 (Per-Process Virtual Address Spaces) Complete. True virtual memory isolation with per-process page tables.
 
 ## Target Architecture
 
@@ -230,6 +230,20 @@ Build flavor differences:
 - Shell foreground execution: `run` command waits for child to complete
 - Scheduler skips PROC_BLOCKED and PROC_ZOMBIE tasks
 
+### Proto 16: Per-Process Virtual Address Spaces
+- Each user process has its own PML4 (page table root)
+- Kernel higher-half mappings cloned to all address spaces
+- Per-process address space fields in task_t: `cr3`, `pml4`
+- `paging_init()` saves kernel master CR3 at boot
+- `paging_clone_kernel_mappings()` copies kernel entries to new PML4
+- `paging_map_page_in()` / `paging_map_user_page_in()` for mapping into specific address spaces
+- `paging_free_user_pages()` walks and frees user-space page tables
+- `elf_load_into()` loads ELF into a specific address space
+- CR3 switch in scheduler before context switch
+- Address space cleanup in `task_reap()` frees all user pages and PML4
+- Standard user addresses: code at 0x400000, stack at 0x70000000
+- User processes cannot access each other's memory
+
 ## User Programs
 
 User programs are in `user/` directory:
@@ -403,6 +417,7 @@ echo $?             # 0 = pass, 1 = fail
 | `shell` | Shell: command parsing, dispatch, error handling |
 | `libc` | Libc: C user program execution with libc |
 | `process` | Process Lifecycle: PID, parent-child, exit codes, wait, zombie reaping |
+| `vmm` | Virtual Memory: per-process address spaces, CR3 switching, memory isolation |
 
 ### Exit Codes
 

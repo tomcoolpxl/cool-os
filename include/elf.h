@@ -104,4 +104,16 @@ int elf_load(const void *data, uint64_t size, elf_info_t *info);
  */
 int elf_load_at(const void *data, uint64_t size, uint64_t load_addr, elf_info_t *info);
 
+/*
+ * Load an ELF64 executable into a specific address space.
+ *
+ * data: pointer to ELF file in memory
+ * size: size of ELF file
+ * pml4: virtual address of the target PML4 (via HHDM)
+ * info: output structure filled on success
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int elf_load_into(const void *data, uint64_t size, uint64_t *pml4, elf_info_t *info);
+
 #endif

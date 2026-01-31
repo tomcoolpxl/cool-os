@@ -22,18 +22,58 @@
 #define USER_VADDR_BASE 0x400000ULL
 
 /*
+ * Initialize paging subsystem.
+ * Saves the kernel's CR3 for later use when creating new address spaces.
+ */
+void paging_init(void);
+
+/*
+ * Get the kernel's master PML4 physical address.
+ */
+uint64_t paging_get_kernel_cr3(void);
+
+/*
  * Map a physical page at a virtual address with specific flags.
+ * Uses current CR3.
  * Returns 0 on success, -1 on failure.
  */
 int paging_map_page(uint64_t vaddr, uint64_t paddr, uint64_t flags);
 
 /*
+ * Map a physical page at a virtual address with specific flags into a specific PML4.
+ * pml4: virtual address of the PML4 (via HHDM)
+ * Returns 0 on success, -1 on failure.
+ */
+int paging_map_page_in(uint64_t *pml4, uint64_t vaddr, uint64_t paddr, uint64_t flags);
+
+/*
  * Map a physical page at a user-space virtual address.
  * Creates page table entries as needed with U/S=1, W=writable.
  * If executable=0, sets NX bit to prevent code execution.
+ * Uses current CR3.
  * Returns 0 on success, -1 on failure.
  */
 int paging_map_user_page(uint64_t vaddr, uint64_t paddr, int writable, int executable);
+
+/*
+ * Map a physical page at a user-space virtual address into a specific PML4.
+ * pml4: virtual address of the PML4 (via HHDM)
+ * Returns 0 on success, -1 on failure.
+ */
+int paging_map_user_page_in(uint64_t *pml4, uint64_t vaddr, uint64_t paddr, int writable, int executable);
+
+/*
+ * Clone kernel higher-half mappings (PML4 entries 256-511) from kernel PML4 to dst.
+ * This includes kernel code/data, HHDM, and framebuffer.
+ */
+void paging_clone_kernel_mappings(uint64_t *dst_pml4);
+
+/*
+ * Free all user-space pages in an address space.
+ * Walks PML4 entries 0-255 (user half), frees leaf pages and intermediate tables.
+ * Does NOT touch kernel half (entries 256-511).
+ */
+void paging_free_user_pages(uint64_t *pml4);
 
 /*
  * Flush TLB for a specific virtual address.

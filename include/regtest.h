@@ -45,13 +45,15 @@
 #define REGTEST_SHELL   1
 #define REGTEST_LIBC    1
 #define REGTEST_PROCESS 1
+#define REGTEST_VMM     1
 #endif
 
 /* Default: run all tests if no specific suite is selected */
 #if !defined(REGTEST_PMM) && !defined(REGTEST_HEAP) && !defined(REGTEST_TASK) && \
     !defined(REGTEST_USER) && !defined(REGTEST_ELF) && !defined(REGTEST_FS) && \
     !defined(REGTEST_FB) && !defined(REGTEST_CONSOLE) && !defined(REGTEST_KBD) && \
-    !defined(REGTEST_SHELL) && !defined(REGTEST_LIBC) && !defined(REGTEST_PROCESS)
+    !defined(REGTEST_SHELL) && !defined(REGTEST_LIBC) && !defined(REGTEST_PROCESS) && \
+    !defined(REGTEST_VMM)
 #define REGTEST_PMM     1
 #define REGTEST_HEAP    1
 #define REGTEST_TASK    1
@@ -64,6 +66,7 @@
 #define REGTEST_SHELL   1
 #define REGTEST_LIBC    1
 #define REGTEST_PROCESS 1
+#define REGTEST_VMM     1
 #endif
 
 /*
@@ -120,5 +123,6 @@ int regtest_kbd(void);
 int regtest_shell(void);
 int regtest_libc(void);
 int regtest_process(void);
+int regtest_vmm(void);
 
 #endif /* REGTEST_H */

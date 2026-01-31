@@ -6,6 +6,8 @@
 #include "panic.h"
 #include "serial.h"
 #include "gdt.h"
+#include "paging.h"
+#include "cpu.h"
 
 /* External: current_task is defined in task.c */
 extern task_t *current_task;
@@ -53,6 +55,10 @@ void scheduler_init(void) {
     bootstrap->exit_code = 0;
     bootstrap->first_child = NULL;
     bootstrap->next_sibling = NULL;
+
+    /* Initialize address space fields (bootstrap uses kernel address space) */
+    bootstrap->cr3 = paging_get_kernel_cr3();
+    bootstrap->pml4 = NULL;  /* Not tracked for kernel tasks */
 
     current_task = bootstrap;
 
@@ -118,6 +124,12 @@ void scheduler_yield(void) {
 
     /* Perform context switch if switching to different task */
     if (old != next) {
+        /* Switch address space if different */
+        uint64_t current_cr3 = read_cr3() & PTE_ADDR_MASK;
+        if (next->cr3 != 0 && next->cr3 != current_cr3) {
+            write_cr3(next->cr3);
+        }
+
         /* Set TSS RSP0 for user task interrupt handling */
         if (next->is_user && next->kernel_rsp) {
             tss_set_rsp0(next->kernel_rsp);

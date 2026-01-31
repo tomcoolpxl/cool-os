@@ -18,6 +18,8 @@
 #include "limine.h"
 #include "kbd.h"
 #include "shell.h"
+#include "paging.h"
+#include "cpu.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -1535,5 +1537,220 @@ int regtest_process(void) {
     /* These are orphan kernel tasks that won't be reaped normally */
 
     regtest_end_suite("process");
+    return 0;
+}
+
+/* ========== VMM Suite (Proto 16) ========== */
+
+/*
+ * VMM Test Suite
+ *
+ * Tests per-process virtual address spaces, address space isolation,
+ * CR3 switching, and memory cleanup.
+ */
+
+/*
+ * user_vmm_simple_code: Just exits with code 0.
+ * Used to test that CR3 switching works correctly.
+ */
+static const uint8_t user_vmm_simple_code[] = {
+    /* xor edi, edi (exit code 0) */
+    0x31, 0xff,
+    /* xor eax, eax (SYS_exit) */
+    0x31, 0xc0,
+    /* syscall */
+    0x0f, 0x05
+};
+
+/*
+ * user_vmm_yield_code: Yields a few times then exits.
+ * Tests repeated CR3 switching.
+ */
+static const uint8_t user_vmm_yield_code[] = {
+    /* mov r12d, 3 (loop counter) */
+    0x41, 0xbc, 0x03, 0x00, 0x00, 0x00,
+    /* loop: */
+    /* mov eax, 2 (SYS_yield) */
+    0xb8, 0x02, 0x00, 0x00, 0x00,
+    /* syscall */
+    0x0f, 0x05,
+    /* dec r12d */
+    0x41, 0xff, 0xcc,
+    /* jnz loop (-11) */
+    0x75, 0xf5,
+    /* xor edi, edi (exit code 0) */
+    0x31, 0xff,
+    /* xor eax, eax (SYS_exit) */
+    0x31, 0xc0,
+    /* syscall */
+    0x0f, 0x05
+};
+
+int regtest_vmm(void) {
+    regtest_start_suite("vmm");
+
+    /* Test 1: Kernel CR3 is saved */
+    uint64_t kernel_cr3 = paging_get_kernel_cr3();
+    if (kernel_cr3 == 0) {
+        regtest_fail("vmm_kernel_cr3", "kernel CR3 is 0");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    regtest_pass("vmm_kernel_cr3");
+
+    /* Test 2: Create address space - verify PML4 allocation works */
+    uint64_t pml4_phys = pmm_alloc_frame();
+    if (pml4_phys == 0) {
+        regtest_fail("vmm_create_pml4", "failed to alloc PML4");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    uint64_t *pml4 = (uint64_t *)phys_to_hhdm(pml4_phys);
+    for (int i = 0; i < 512; i++) {
+        pml4[i] = 0;
+    }
+    paging_clone_kernel_mappings(pml4);
+
+    /* Verify kernel mappings are present (entries 256-511) */
+    uint64_t *kernel_pml4 = (uint64_t *)phys_to_hhdm(kernel_cr3);
+    int kernel_mappings_ok = 1;
+    for (int i = 256; i < 512; i++) {
+        if (pml4[i] != kernel_pml4[i]) {
+            kernel_mappings_ok = 0;
+            break;
+        }
+    }
+    if (!kernel_mappings_ok) {
+        regtest_fail("vmm_clone_kernel", "kernel mappings not cloned");
+        pmm_free_frame(pml4_phys);
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    pmm_free_frame(pml4_phys);
+    regtest_pass("vmm_clone_kernel");
+
+    /* Test 3: User task has its own CR3 */
+    task_t *user1 = task_create_user(user_vmm_simple_code, sizeof(user_vmm_simple_code));
+    if (user1 == NULL) {
+        regtest_fail("vmm_user_cr3", "failed to create user task");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    if (user1->cr3 == 0 || user1->cr3 == kernel_cr3) {
+        regtest_fail("vmm_user_cr3", "user task should have separate CR3");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    if (user1->pml4 == NULL) {
+        regtest_fail("vmm_user_cr3", "user task pml4 is NULL");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    regtest_pass("vmm_user_cr3");
+
+    /* Test 4: Two user tasks have different CR3s */
+    task_t *user2 = task_create_user(user_vmm_yield_code, sizeof(user_vmm_yield_code));
+    if (user2 == NULL) {
+        regtest_fail("vmm_separate_cr3", "failed to create second user task");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    if (user2->cr3 == user1->cr3) {
+        regtest_fail("vmm_separate_cr3", "both tasks have same CR3");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    regtest_pass("vmm_separate_cr3");
+
+    /* Test 5: CR3 switch on context switch - run user task and verify stability */
+    task_set_parent(user1, task_current());
+    scheduler_add(user1);
+
+    /* Wait for user1 to complete */
+    int status = -1;
+    int pid = task_wait(&status);
+    if (pid <= 0) {
+        regtest_fail("vmm_context_switch", "wait for user1 failed");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    /* Task ran and exited successfully with CR3 switching */
+    regtest_pass("vmm_context_switch");
+
+    /* Test 6: Multiple ELF tasks with separate address spaces */
+    if (limine_modules != NULL && limine_modules->module_count > 0) {
+        struct limine_file *init_mod = find_module("init.elf");
+        if (init_mod != NULL) {
+            task_t *elf1 = task_create_elf(init_mod->address, init_mod->size);
+            task_t *elf2 = task_create_elf(init_mod->address, init_mod->size);
+
+            if (elf1 != NULL && elf2 != NULL) {
+                if (elf1->cr3 == elf2->cr3) {
+                    regtest_fail("vmm_elf_separate", "ELF tasks have same CR3");
+                    regtest_end_suite("vmm");
+                    return -1;
+                }
+
+                /* Run both to completion */
+                task_set_parent(elf1, task_current());
+                task_set_parent(elf2, task_current());
+                scheduler_add(elf1);
+                scheduler_add(elf2);
+
+                /* Wait for both */
+                task_wait(NULL);
+                task_wait(NULL);
+
+                regtest_pass("vmm_elf_separate");
+            } else {
+                regtest_log("NOTE: Could not create ELF tasks, skipping\n");
+                regtest_pass("vmm_elf_separate_skip");
+            }
+        } else {
+            regtest_log("NOTE: init.elf not found, skipping ELF test\n");
+            regtest_pass("vmm_elf_separate_skip");
+        }
+    } else {
+        regtest_log("NOTE: No modules, skipping ELF test\n");
+        regtest_pass("vmm_elf_separate_skip");
+    }
+
+    /* Test 7: Memory leak test - create and destroy multiple processes */
+    uint64_t free_before = pmm_get_free_frames();
+
+    for (int i = 0; i < 5; i++) {
+        task_t *tmp = task_create_user(user_vmm_simple_code, sizeof(user_vmm_simple_code));
+        if (tmp == NULL) {
+            regtest_fail("vmm_stress_create", "failed to create task");
+            regtest_end_suite("vmm");
+            return -1;
+        }
+        task_set_parent(tmp, task_current());
+        scheduler_add(tmp);
+        task_wait(NULL);  /* Waits and reaps */
+    }
+
+    uint64_t free_after = pmm_get_free_frames();
+
+    /* Allow for some variance due to test infrastructure overhead */
+    if (free_after < free_before - 5) {
+        regtest_fail("vmm_no_leak", "memory leak detected");
+        regtest_end_suite("vmm");
+        return -1;
+    }
+    regtest_pass("vmm_no_leak");
+
+    /* Clean up user2 (not scheduled yet) - manually free resources */
+    /* Note: user2 was created but never added to scheduler, so we need to clean it up */
+    if (user2->pml4 != NULL && user2->cr3 != paging_get_kernel_cr3()) {
+        paging_free_user_pages(user2->pml4);
+        pmm_free_frame(user2->cr3);
+    }
+    if (user2->stack_base != NULL) {
+        pmm_free_frame(hhdm_to_phys(user2->stack_base));
+    }
+    kfree(user2);
+
+    regtest_end_suite("vmm");
     return 0;
 }

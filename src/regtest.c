@@ -218,6 +218,10 @@ int regtest_run_all(void) {
     if (regtest_process() != 0) result = -1;
 #endif
 
+#ifdef REGTEST_VMM
+    if (regtest_vmm() != 0) result = -1;
+#endif
+
     regtest_log("SUMMARY total=%d passed=%d failed=%d\n",
                 total_passed + total_failed, total_passed, total_failed);
 

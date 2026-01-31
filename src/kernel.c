@@ -25,6 +25,7 @@
 #include "pci.h"
 #include "lapic.h"
 #include "shell.h"
+#include "paging.h"
 
 #ifdef REGTEST_BUILD
 #include "regtest.h"
@@ -297,6 +298,9 @@ void kmain(void) {
 
     /* Initialize physical memory manager */
     pmm_init();
+
+    /* Initialize paging subsystem (save kernel CR3) */
+    paging_init();
 
     /* Initialize heap allocator */
     heap_init();

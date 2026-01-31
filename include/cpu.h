@@ -15,6 +15,10 @@ static inline uint64_t read_cr3(void) {
     return cr3;
 }
 
+static inline void write_cr3(uint64_t cr3) {
+    asm volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+}
+
 static inline void cpu_halt(void) {
     for (;;) {
         asm volatile("cli; hlt");

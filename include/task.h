@@ -39,6 +39,10 @@ typedef struct task {
     int exit_code;          /* Exit status (valid in PROC_ZOMBIE state) */
     struct task *first_child;   /* Head of children list */
     struct task *next_sibling;  /* Next sibling in parent's child list */
+
+    /* Address space fields (Proto 16) */
+    uint64_t cr3;           /* Physical address of PML4 */
+    uint64_t *pml4;         /* Virtual address of PML4 (via HHDM) */
 } task_t;
 
 task_t *task_create(void (*entry)(void));

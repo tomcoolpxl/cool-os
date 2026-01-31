@@ -11,11 +11,9 @@
 #include "serial.h"
 #include "elf.h"
 #include "vfs.h"
+#include "cpu.h"
 
 static uint64_t next_task_id = 0;
-
-/* Counter for unique user virtual address allocation per task */
-static uint64_t next_user_slot = 0;
 
 /* PID counter - starts at 1 (PID 0 reserved for kernel) */
 static uint32_t next_pid = 1;
@@ -57,6 +55,10 @@ task_t *task_create(void (*entry)(void)) {
     task->exit_code = 0;
     task->first_child = NULL;
     task->next_sibling = NULL;
+
+    /* Address space fields - kernel tasks use kernel's address space */
+    task->cr3 = paging_get_kernel_cr3();
+    task->pml4 = NULL;  /* Not tracked for kernel tasks */
 
     /*
      * Set up initial stack frame for context_switch.
@@ -165,6 +167,19 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     ASSERT(kernel_stack_phys != 0);
     void *kernel_stack_base = (void *)phys_to_hhdm(kernel_stack_phys);
 
+    /* Allocate PML4 for this process's address space */
+    uint64_t pml4_phys = pmm_alloc_frame();
+    ASSERT(pml4_phys != 0);
+    uint64_t *pml4 = (uint64_t *)phys_to_hhdm(pml4_phys);
+
+    /* Zero the PML4 */
+    for (int i = 0; i < 512; i++) {
+        pml4[i] = 0;
+    }
+
+    /* Clone kernel mappings into new address space */
+    paging_clone_kernel_mappings(pml4);
+
     /* Allocate user code page from PMM */
     uint64_t user_code_phys = pmm_alloc_frame();
     ASSERT(user_code_phys != 0);
@@ -173,23 +188,16 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     uint64_t user_stack_phys = pmm_alloc_frame();
     ASSERT(user_stack_phys != 0);
 
-    /* Get unique slot for this task's user virtual addresses */
-    uint64_t slot = next_user_slot++;
-
-    /* Calculate user virtual addresses for this task
-     * Each task gets its own code page and stack page at unique addresses
-     * Code:  0x400000 + slot * 0x10000 (64KB apart)
-     * Stack: 0x800000 + slot * 0x10000
-     */
-    uint64_t user_code_vaddr = USER_CODE_VADDR + slot * 0x10000;
-    uint64_t user_stack_vaddr = USER_STACK_VADDR + slot * 0x10000;
+    /* Standard user virtual addresses - each process has its own address space */
+    uint64_t user_code_vaddr = USER_CODE_VADDR;
+    uint64_t user_stack_vaddr = USER_STACK_VADDR;
 
     /* Map user code page at user virtual address (read-only, executable) */
-    int ret = paging_map_user_page(user_code_vaddr, user_code_phys, 0, 1);
+    int ret = paging_map_user_page_in(pml4, user_code_vaddr, user_code_phys, 0, 1);
     ASSERT(ret == 0);
 
     /* Map user stack page at user virtual address (read-write, non-executable) */
-    ret = paging_map_user_page(user_stack_vaddr, user_stack_phys, 1, 0);
+    ret = paging_map_user_page_in(pml4, user_stack_vaddr, user_stack_phys, 1, 0);
     ASSERT(ret == 0);
 
     /* Copy user code to the user code page (via HHDM for kernel access) */
@@ -228,6 +236,10 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     task->first_child = NULL;
     task->next_sibling = NULL;
 
+    /* Address space fields */
+    task->cr3 = pml4_phys;
+    task->pml4 = pml4;
+
     /*
      * Set up kernel stack frame for context_switch.
      * Stack grows downward, so start at top of allocated region.
@@ -252,27 +264,9 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     return task;
 }
 
-/* Counter for unique ELF user address allocation per task */
-static uint64_t next_elf_slot = 0;
-
-/* ELF code base address and spacing between tasks */
-#define ELF_CODE_BASE   0x1000000ULL    /* 16 MB - base for ELF code */
-#define ELF_SLOT_SIZE   0x100000ULL     /* 1 MB spacing between ELF programs */
-
 task_t *task_create_elf(const void *data, uint64_t size) {
     if (data == NULL || size == 0) {
         serial_puts("task_create_elf: Invalid parameters\n");
-        return NULL;
-    }
-
-    /* Get unique slot for this task's code address */
-    uint64_t elf_slot = next_elf_slot++;
-    uint64_t load_addr = ELF_CODE_BASE + elf_slot * ELF_SLOT_SIZE;
-
-    /* Load the ELF executable into user address space at unique address */
-    elf_info_t elf_info;
-    if (elf_load_at(data, size, load_addr, &elf_info) != 0) {
-        serial_puts("task_create_elf: ELF load failed\n");
         return NULL;
     }
 
@@ -292,18 +286,46 @@ task_t *task_create_elf(const void *data, uint64_t size) {
     }
     void *kernel_stack_base = (void *)phys_to_hhdm(kernel_stack_phys);
 
-    /* Use same slot for stack (already allocated for code) */
-    uint64_t stack_slot = elf_slot;
+    /* Allocate PML4 for this process's address space */
+    uint64_t pml4_phys = pmm_alloc_frame();
+    if (pml4_phys == 0) {
+        pmm_free_frame(kernel_stack_phys);
+        kfree(task);
+        serial_puts("task_create_elf: Out of memory for PML4\n");
+        return NULL;
+    }
+    uint64_t *pml4 = (uint64_t *)phys_to_hhdm(pml4_phys);
 
-    /* Calculate user stack base address (each task gets separate stack region) */
-    uint64_t user_stack_top = USER_ELF_STACK_TOP - stack_slot * (USER_ELF_STACK_PAGES * 0x1000 + 0x1000);
+    /* Zero the PML4 */
+    for (int i = 0; i < 512; i++) {
+        pml4[i] = 0;
+    }
+
+    /* Clone kernel mappings into new address space */
+    paging_clone_kernel_mappings(pml4);
+
+    /* Load the ELF executable into this process's address space */
+    elf_info_t elf_info;
+    if (elf_load_into(data, size, pml4, &elf_info) != 0) {
+        pmm_free_frame(pml4_phys);
+        pmm_free_frame(kernel_stack_phys);
+        kfree(task);
+        serial_puts("task_create_elf: ELF load failed\n");
+        return NULL;
+    }
+
+    /* Standard user stack location - each process has its own address space */
+    uint64_t user_stack_top = USER_ELF_STACK_TOP;
     uint64_t user_stack_base = user_stack_top - USER_ELF_STACK_PAGES * 0x1000;
 
-    /* Allocate and map user stack pages */
+    /* Allocate and map user stack pages into this process's address space */
     for (int i = 0; i < USER_ELF_STACK_PAGES; i++) {
         uint64_t stack_phys = pmm_alloc_frame();
         if (stack_phys == 0) {
             /* TODO: cleanup already allocated pages */
+            paging_free_user_pages(pml4);
+            pmm_free_frame(pml4_phys);
+            pmm_free_frame(kernel_stack_phys);
             kfree(task);
             serial_puts("task_create_elf: Out of memory for user stack\n");
             return NULL;
@@ -315,9 +337,13 @@ task_t *task_create_elf(const void *data, uint64_t size) {
             stack_page[j] = 0;
         }
 
-        /* Map user stack page (read-write, non-executable) */
+        /* Map user stack page (read-write, non-executable) into this address space */
         uint64_t page_vaddr = user_stack_base + i * 0x1000;
-        if (paging_map_user_page(page_vaddr, stack_phys, 1, 0) != 0) {
+        if (paging_map_user_page_in(pml4, page_vaddr, stack_phys, 1, 0) != 0) {
+            pmm_free_frame(stack_phys);
+            paging_free_user_pages(pml4);
+            pmm_free_frame(pml4_phys);
+            pmm_free_frame(kernel_stack_phys);
             kfree(task);
             serial_puts("task_create_elf: Failed to map user stack\n");
             return NULL;
@@ -353,6 +379,10 @@ task_t *task_create_elf(const void *data, uint64_t size) {
     task->exit_code = 0;
     task->first_child = NULL;
     task->next_sibling = NULL;
+
+    /* Address space fields */
+    task->cr3 = pml4_phys;
+    task->pml4 = pml4;
 
     /*
      * Set up kernel stack frame for context_switch.
@@ -545,6 +575,12 @@ void task_reap(task_t *zombie) {
 
     /* Remove from scheduler queue */
     remove_from_scheduler(zombie);
+
+    /* Free address space if this is a user task with its own address space */
+    if (zombie->pml4 != NULL && zombie->cr3 != paging_get_kernel_cr3()) {
+        paging_free_user_pages(zombie->pml4);
+        pmm_free_frame(zombie->cr3);  /* Free PML4 page itself */
+    }
 
     /* Free kernel stack */
     if (zombie->stack_base != NULL) {
