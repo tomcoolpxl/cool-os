@@ -20,7 +20,13 @@
       "Bash(pkill:*)",
       "Bash(mdir:*)",
       "Bash(objdump:*)",
-      "Bash(readelf:*)"
+      "Bash(readelf:*)",
+      "Bash(REGTEST_TIMEOUT=30 make regtest:*)",
+      "Bash(REGTEST_TIMEOUT=60 make regtest:*)",
+      "Bash(REGTEST_TIMEOUT=10 make regtest:*)",
+      "Bash(REGTEST_TIMEOUT=5 make regtest:*)",
+      "Bash(REGTEST_TIMEOUT=90 make regtest:*)",
+      "Bash(REGTEST_TIMEOUT=15 make regtest:*)"
     ]
   }
 }

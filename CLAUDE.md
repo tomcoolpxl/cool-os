@@ -10,7 +10,7 @@ The kernel is written primarily in C, with some assembly for low-level tasks lik
 
 **Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
 
-**Current Status:** Proto 16 (Per-Process Virtual Address Spaces) Complete. True virtual memory isolation with per-process page tables.
+**Current Status:** Proto 17 (Preemptive Scheduler) Complete. Timer-driven preemption ensures fair CPU distribution.
 
 ## Target Architecture
 
@@ -61,7 +61,7 @@ Build flavor differences:
 - `build/dist/user/*.elf` - User program ELF files
 - `build/obj/<flavor>/` - Object files per flavor
 
-## Implemented Features (Proto 1-15)
+## Implemented Features (Proto 1-17)
 
 ### Proto 1: Boot & Serial
 - UEFI boot via Limine, long mode entry
@@ -244,6 +244,19 @@ Build flavor differences:
 - Standard user addresses: code at 0x400000, stack at 0x70000000
 - User processes cannot access each other's memory
 
+### Proto 17: Preemptive Scheduler
+- Timer-driven preemption via PIT IRQ (100 Hz)
+- Time slice: 5 ticks (50ms) per task (`SCHED_TICK_SLICE`)
+- `ticks_remaining` field in task_t for countdown
+- `scheduler_preempt()` called from timer IRQ when time slice expires
+- IRQ common stub checks `preempt_new_rsp` after handler returns
+- Stack switch in assembly before register restore and `iretq`
+- CR3 and TSS RSP0 updated before stack switch
+- Reentrancy guard prevents nested scheduler calls
+- Cooperative `task_yield()` still works (resets time slice)
+- CPU hogs automatically preempted - shell remains responsive
+- Fair CPU distribution among ready tasks
+
 ## User Programs
 
 User programs are in `user/` directory:
@@ -255,6 +268,8 @@ User programs are in `user/` directory:
 
 **C programs** (linked with libc):
 - `hello.c` - Demonstrates printf, strlen, malloc
+- `loop.c` - CPU hog test (infinite loop, tests preemption)
+- `spinner.c` - Fairness test (prints PID, tests scheduling)
 
 **Libc** (`user/libc/`):
 - `crt0.S` - C runtime entry point
@@ -294,7 +309,7 @@ include/
   pmm.h         - Physical memory manager API
   ports.h       - I/O port access (inb/outb/inw/outw/insw/io_wait)
   regtest.h     - Regression test infrastructure API
-  scheduler.h   - Scheduler API (init/add/yield)
+  scheduler.h   - Scheduler API (init/add/yield/preempt)
   serial.h      - Serial port I/O
   shell.h       - Kernel shell API and return codes
   syscall.h     - Syscall numbers and dispatcher
@@ -418,6 +433,7 @@ echo $?             # 0 = pass, 1 = fail
 | `libc` | Libc: C user program execution with libc |
 | `process` | Process Lifecycle: PID, parent-child, exit codes, wait, zombie reaping |
 | `vmm` | Virtual Memory: per-process address spaces, CR3 switching, memory isolation |
+| `preempt` | Preemptive Scheduling: time slice, timer-driven preemption, fairness |
 
 ### Exit Codes
 

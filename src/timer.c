@@ -5,11 +5,16 @@
 #include "kbd.h"
 #include "xhci.h"
 #include "serial.h"
+#include "task.h"
+#include "scheduler.h"
 
 #define IRQ_TIMER    0x20
 #define IRQ_KEYBOARD 0x21
 #define IRQ_XHCI     0x22
 #define IRQ_XHCI_MSI 0x40
+
+/* External: current_task is defined in task.c */
+extern task_t *current_task;
 
 void timer_init(void) {
     /* Timer is already set up by pic_init() and pit_init() */
@@ -41,6 +46,20 @@ void irq_handler(struct interrupt_frame *frame) {
     if (frame->vector == IRQ_TIMER) {
         pit_tick();
         pic_send_eoi(0);  /* IRQ0 = timer */
+
+        /*
+         * Preemptive scheduling (Proto 17).
+         * Decrement time slice for current task and preempt if expired.
+         * Only preempt RUNNING tasks - idle, zombie, blocked tasks skip.
+         */
+        if (current_task != NULL && current_task->state == PROC_RUNNING) {
+            if (current_task->ticks_remaining > 0) {
+                current_task->ticks_remaining--;
+            }
+            if (current_task->ticks_remaining == 0) {
+                scheduler_preempt(frame);
+            }
+        }
     } else if (frame->vector == IRQ_KEYBOARD) {
         kbd_handle_irq();
         pic_send_eoi(1);  /* IRQ1 = keyboard */

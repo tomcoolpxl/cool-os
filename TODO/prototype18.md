@@ -1,4 +1,3 @@
-```md
 # Prototype 18: fork(), Address Space Duplication, and Copy-on-Write Preparation
 
 ## Purpose
@@ -297,4 +296,3 @@ Goals:
 - Implement exec() syscall
 - Combine fork + exec for full UNIX process model
 - Prepare for moving shell fully into userland
-```

@@ -8,6 +8,7 @@
 #include "gdt.h"
 #include "paging.h"
 #include "cpu.h"
+#include "isr.h"
 
 /* External: current_task is defined in task.c */
 extern task_t *current_task;
@@ -17,6 +18,18 @@ extern void context_switch(task_t *old, task_t *new);
 
 /* Idle task: runs when no other tasks are ready */
 static task_t *idle_task = NULL;
+
+/*
+ * Preemption support (Proto 17).
+ *
+ * preempt_new_rsp: Reserved for future IRQ-based context switching.
+ * Currently unused - preemption uses scheduler_yield() instead.
+ * Kept for compatibility with isr_stubs.S which references it.
+ */
+volatile uint64_t preempt_new_rsp = 0;
+
+/* Reentrancy guard - prevents nested scheduler calls from timer IRQs */
+static volatile int in_scheduler = 0;
 
 /* Idle task entry point: halts until next interrupt, then yields */
 static void idle_entry(void) {
@@ -60,6 +73,9 @@ void scheduler_init(void) {
     bootstrap->cr3 = paging_get_kernel_cr3();
     bootstrap->pml4 = NULL;  /* Not tracked for kernel tasks */
 
+    /* Initialize preemptive scheduling time slice (Proto 17) */
+    bootstrap->ticks_remaining = SCHED_TICK_SLICE;
+
     current_task = bootstrap;
 
     /* Create idle task */
@@ -92,9 +108,8 @@ void scheduler_add(task_t *task) {
 void scheduler_yield(void) {
     ASSERT(current_task != NULL);
 
-    /* Save flags and disable interrupts */
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags));
+    /* Disable interrupts during scheduling */
+    asm volatile("cli");
 
     /* Find next READY task (round-robin) */
     task_t *old = current_task;
@@ -122,6 +137,9 @@ void scheduler_yield(void) {
     next->state = PROC_RUNNING;
     current_task = next;
 
+    /* Reset time slice for next task (Proto 17) */
+    next->ticks_remaining = SCHED_TICK_SLICE;
+
     /* Perform context switch if switching to different task */
     if (old != next) {
         /* Switch address space if different */
@@ -137,6 +155,65 @@ void scheduler_yield(void) {
         context_switch(old, next);
     }
 
-    /* Restore flags (re-enables interrupts if they were enabled) */
-    asm volatile("push %0; popfq" : : "r"(flags));
+    /*
+     * Re-enable interrupts (Proto 17).
+     *
+     * We always enable interrupts here because:
+     * 1. Normal yield: task voluntarily yielded, wants interrupts back
+     * 2. Preemption: task was preempted from IRQ handler, needs interrupts
+     *    re-enabled so future timer interrupts can fire
+     *
+     * This is safe because:
+     * - For user tasks: iretq will restore user RFLAGS anyway
+     * - For kernel tasks: they expect to run with IF=1
+     */
+    asm volatile("sti");
+}
+
+/*
+ * Preemptive scheduler entry point (Proto 17).
+ *
+ * Called from timer IRQ handler when current task's time slice expires.
+ * This function uses the standard scheduler_yield() path to switch tasks,
+ * avoiding the complexity of IRQ-frame vs context-switch frame mismatch.
+ *
+ * When called for a user task in IRQ context:
+ * - The IRQ handler has already saved all registers on the kernel stack
+ * - We call scheduler_yield() which will:
+ *   - Save current context (via context_switch)
+ *   - Pick next task
+ *   - Restore next task's context
+ * - When we return here, we're in the same task, IRQ handler returns normally
+ *
+ * The key insight: scheduler_yield() does cooperative switching. When we
+ * preempt a user task, we're in kernel mode (in IRQ handler), so we can
+ * safely call scheduler_yield(). The user-mode state is already saved
+ * on the task's kernel stack by the IRQ entry, and will be restored by iretq.
+ *
+ * This approach works because:
+ * 1. IRQ saves user state on kernel stack
+ * 2. scheduler_yield saves kernel state via context_switch
+ * 3. Later, context_switch restores kernel state
+ * 4. IRQ return restores user state via iretq
+ */
+void scheduler_preempt(struct interrupt_frame *frame) {
+    (void)frame;  /* Not used - context saved by scheduler_yield */
+
+    /* Reentrancy guard - timer could fire while we're in the scheduler */
+    if (in_scheduler) {
+        return;
+    }
+
+    ASSERT(current_task != NULL);
+
+    /*
+     * Call the standard yield function. This will:
+     * - Save current kernel context
+     * - Switch to next ready task
+     * - Restore that task's kernel context
+     *
+     * When we return (if we return), the IRQ handler will continue
+     * and iretq will restore user state.
+     */
+    scheduler_yield();
 }

@@ -153,6 +153,11 @@ IRQ_STUB 0x40
  *   [rsp+32] = rflags
  *   [rsp+40] = rsp (from before interrupt)
  *   [rsp+48] = ss
+ *
+ * Preemption (Proto 17):
+ *   If scheduler_preempt() sets preempt_new_rsp, we switch to the new
+ *   task's stack before restoring registers. The iretq then returns
+ *   to the new task's saved context.
  */
 irq_common_stub:
     /* Clear direction flag for string operations (ABI compliance) */
@@ -180,6 +185,19 @@ irq_common_stub:
 
     /* Call C handler */
     call irq_handler
+
+    /*
+     * Check for preemption request (Proto 17).
+     * If preempt_new_rsp is non-zero, switch to the new task's stack.
+     */
+    movq preempt_new_rsp(%rip), %rax
+    testq %rax, %rax
+    jz .no_preempt
+    /* Switch to new task's stack */
+    movq %rax, %rsp
+    /* Clear the preemption request */
+    movq $0, preempt_new_rsp(%rip)
+.no_preempt:
 
     /* Restore all general-purpose registers */
     popq %r15

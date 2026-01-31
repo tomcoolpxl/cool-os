@@ -20,6 +20,7 @@
 #include "shell.h"
 #include "paging.h"
 #include "cpu.h"
+#include "timer.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -1752,5 +1753,249 @@ int regtest_vmm(void) {
     kfree(user2);
 
     regtest_end_suite("vmm");
+    return 0;
+}
+
+/* ========== Preemption Suite (Proto 17) ========== */
+
+/*
+ * Preemption Test Suite
+ *
+ * Tests preemptive multitasking - tasks are automatically preempted by
+ * the timer interrupt when their time slice expires.
+ */
+
+/* Global counters for preemption tests */
+static volatile int preempt_task1_count = 0;
+static volatile int preempt_task2_count = 0;
+static volatile int preempt_test_done = 0;
+
+/*
+ * CPU hog task - increments counter without yielding.
+ * Tests that timer preemption allows other tasks to run.
+ */
+static void preempt_hog_fn(void) {
+    while (!preempt_test_done) {
+        preempt_task1_count++;
+        /* Busy loop - no yield, relies on preemption */
+    }
+}
+
+/*
+ * Observer task - increments counter then yields.
+ * Each time it runs, it counts once and yields, letting hog run.
+ * After 3 counts, it sets the done flag.
+ */
+static void preempt_observer_fn(void) {
+    while (!preempt_test_done) {
+        preempt_task2_count++;
+
+        /* After running a few times, signal completion */
+        if (preempt_task2_count >= 3) {
+            preempt_test_done = 1;
+            break;
+        }
+
+        /* Yield to let hog run */
+        task_yield();
+    }
+}
+
+/*
+ * User code that busy-loops without yielding.
+ * Used to test user-mode preemption.
+ */
+static const uint8_t preempt_user_loop_code[] = {
+    /* .loop: */
+    /* inc eax */
+    0xff, 0xc0,
+    /* cmp eax, 0x1000000 (loop ~16M times) */
+    0x3d, 0x00, 0x00, 0x00, 0x01,
+    /* jb .loop */
+    0x72, 0xf7,
+    /* xor edi, edi */
+    0x31, 0xff,
+    /* xor eax, eax (SYS_exit) */
+    0x31, 0xc0,
+    /* syscall */
+    0x0f, 0x05
+};
+
+/*
+ * User code that yields explicitly.
+ * Used to test that cooperative yield still works with preemption.
+ */
+static const uint8_t preempt_user_yield_code[] = {
+    /* mov r12d, 3 (loop counter) */
+    0x41, 0xbc, 0x03, 0x00, 0x00, 0x00,
+    /* .loop: */
+    /* mov eax, 2 (SYS_yield) */
+    0xb8, 0x02, 0x00, 0x00, 0x00,
+    /* syscall */
+    0x0f, 0x05,
+    /* dec r12d */
+    0x41, 0xff, 0xcc,
+    /* jnz .loop */
+    0x75, 0xf5,
+    /* xor edi, edi */
+    0x31, 0xff,
+    /* xor eax, eax (SYS_exit) */
+    0x31, 0xc0,
+    /* syscall */
+    0x0f, 0x05
+};
+
+int regtest_preempt(void) {
+    regtest_start_suite("preempt");
+
+    /* Test 1: Verify time slice is initialized */
+    task_t *current = task_current();
+    if (current == NULL) {
+        regtest_fail("preempt_current_task", "current task is NULL");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+    /* Time slice should be initialized */
+    if (current->ticks_remaining > SCHED_TICK_SLICE) {
+        regtest_fail("preempt_timeslice_init", "invalid ticks_remaining");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+    regtest_pass("preempt_timeslice_init");
+
+    /* Test 2: Kernel task preemption - hog task should be preempted */
+    preempt_task1_count = 0;
+    preempt_task2_count = 0;
+    preempt_test_done = 0;
+
+    task_t *hog = task_create(preempt_hog_fn);
+    task_t *observer = task_create(preempt_observer_fn);
+    if (hog == NULL || observer == NULL) {
+        regtest_fail("preempt_basic_create", "failed to create tasks");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    scheduler_add(hog);
+    scheduler_add(observer);
+
+    /* Wait for test to complete (observer should run multiple times) */
+    int timeout = 0;
+    while (!preempt_test_done && timeout < 10000) {
+        task_yield();
+        timeout++;
+    }
+
+    if (!preempt_test_done) {
+        regtest_fail("preempt_basic", "preemption timeout - hog blocked system");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    if (preempt_task2_count < 3) {
+        regtest_fail("preempt_basic", "observer didn't run enough times");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    /* Hog should have run and counted something */
+    if (preempt_task1_count == 0) {
+        regtest_fail("preempt_basic", "hog task didn't run");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    regtest_pass("preempt_basic");
+
+    /* Test 3: Cooperative yield still works */
+    task_t *yield_task = task_create_user(preempt_user_yield_code, sizeof(preempt_user_yield_code));
+    if (yield_task == NULL) {
+        regtest_fail("preempt_yield_compat_create", "failed to create user task");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    task_set_parent(yield_task, task_current());
+    scheduler_add(yield_task);
+
+    int status = -1;
+    int pid = task_wait(&status);
+    if (pid <= 0) {
+        regtest_fail("preempt_yield_compat", "wait failed");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    regtest_pass("preempt_yield_compat");
+
+    /* Test 4: User-mode task preemption */
+    task_t *user_loop = task_create_user(preempt_user_loop_code, sizeof(preempt_user_loop_code));
+    if (user_loop == NULL) {
+        regtest_fail("preempt_user_create", "failed to create user loop task");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    task_set_parent(user_loop, task_current());
+    scheduler_add(user_loop);
+
+    /* Wait for user loop to complete */
+    status = -1;
+    pid = task_wait(&status);
+    if (pid <= 0) {
+        regtest_fail("preempt_user", "user loop task didn't complete");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    regtest_pass("preempt_user");
+
+    /* Test 5: Multiple user tasks with preemption */
+    task_t *user1 = task_create_user(preempt_user_loop_code, sizeof(preempt_user_loop_code));
+    task_t *user2 = task_create_user(preempt_user_loop_code, sizeof(preempt_user_loop_code));
+    if (user1 == NULL || user2 == NULL) {
+        regtest_fail("preempt_multi_user_create", "failed to create tasks");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    task_set_parent(user1, task_current());
+    task_set_parent(user2, task_current());
+    scheduler_add(user1);
+    scheduler_add(user2);
+
+    /* Wait for both */
+    task_wait(NULL);
+    task_wait(NULL);
+
+    regtest_pass("preempt_multi_user");
+
+    /* Test 6: Stress test - many quick context switches */
+    uint64_t free_before = pmm_get_free_frames();
+
+    for (int i = 0; i < 5; i++) {
+        task_t *stress = task_create_user(preempt_user_loop_code, sizeof(preempt_user_loop_code));
+        if (stress == NULL) {
+            regtest_fail("preempt_stress_create", "failed to create stress task");
+            regtest_end_suite("preempt");
+            return -1;
+        }
+        task_set_parent(stress, task_current());
+        scheduler_add(stress);
+        task_wait(NULL);
+    }
+
+    uint64_t free_after = pmm_get_free_frames();
+
+    /* Check for memory leaks (allow small variance) */
+    if (free_after < free_before - 5) {
+        regtest_fail("preempt_stress", "memory leak during stress test");
+        regtest_end_suite("preempt");
+        return -1;
+    }
+
+    regtest_pass("preempt_stress");
+
+    regtest_end_suite("preempt");
     return 0;
 }

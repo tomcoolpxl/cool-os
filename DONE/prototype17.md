@@ -1,4 +1,3 @@
-```md
 # Prototype 17: Preemptive Scheduler and Timer-Based Multitasking
 
 ## Purpose
@@ -276,4 +275,3 @@ Goals:
 - Duplicate address spaces
 - Introduce reference-counted physical pages
 - Prepare for UNIX-like process model
-```

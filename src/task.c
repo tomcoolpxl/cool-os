@@ -60,6 +60,9 @@ task_t *task_create(void (*entry)(void)) {
     task->cr3 = paging_get_kernel_cr3();
     task->pml4 = NULL;  /* Not tracked for kernel tasks */
 
+    /* Initialize preemptive scheduling time slice (Proto 17) */
+    task->ticks_remaining = SCHED_TICK_SLICE;
+
     /*
      * Set up initial stack frame for context_switch.
      * Stack grows downward, so start at top of allocated region.
@@ -240,6 +243,9 @@ task_t *task_create_user(const void *code, uint64_t code_size) {
     task->cr3 = pml4_phys;
     task->pml4 = pml4;
 
+    /* Initialize preemptive scheduling time slice (Proto 17) */
+    task->ticks_remaining = SCHED_TICK_SLICE;
+
     /*
      * Set up kernel stack frame for context_switch.
      * Stack grows downward, so start at top of allocated region.
@@ -383,6 +389,9 @@ task_t *task_create_elf(const void *data, uint64_t size) {
     /* Address space fields */
     task->cr3 = pml4_phys;
     task->pml4 = pml4;
+
+    /* Initialize preemptive scheduling time slice (Proto 17) */
+    task->ticks_remaining = SCHED_TICK_SLICE;
 
     /*
      * Set up kernel stack frame for context_switch.
