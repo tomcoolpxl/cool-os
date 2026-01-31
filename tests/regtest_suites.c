@@ -24,6 +24,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef REGTEST_BUILD
+
 /* External Limine module response for ELF tests */
 extern struct limine_module_response *limine_modules;
 extern struct limine_file *find_module(const char *name);
@@ -1577,8 +1579,8 @@ static const uint8_t user_vmm_yield_code[] = {
     0x0f, 0x05,
     /* dec r12d */
     0x41, 0xff, 0xcc,
-    /* jnz loop (-11) */
-    0x75, 0xf5,
+    /* jnz loop (-12) */
+    0x75, 0xf4,
     /* xor edi, edi (exit code 0) */
     0x31, 0xff,
     /* xor eax, eax (SYS_exit) */
@@ -1835,8 +1837,8 @@ static const uint8_t preempt_user_yield_code[] = {
     0x0f, 0x05,
     /* dec r12d */
     0x41, 0xff, 0xcc,
-    /* jnz .loop */
-    0x75, 0xf5,
+    /* jnz .loop (-12) */
+    0x75, 0xf4,
     /* xor edi, edi */
     0x31, 0xff,
     /* xor eax, eax (SYS_exit) */
@@ -1999,3 +2001,5 @@ int regtest_preempt(void) {
     regtest_end_suite("preempt");
     return 0;
 }
+
+#endif /* REGTEST_BUILD */
