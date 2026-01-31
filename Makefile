@@ -227,8 +227,6 @@ run-qemu: all
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-drive format=raw,file=$(OS_IMG) \
-		-device qemu-xhci \
-		-device usb-kbd \
 		-serial stdio \
 		-display gtk
 
