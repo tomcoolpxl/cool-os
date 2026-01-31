@@ -130,4 +130,14 @@ int fat_close(int fd);
  */
 uint32_t fat_get_size(int fd);
 
+/* Callback type for directory iteration */
+typedef void (*fat_dir_callback_t)(const char *name, uint32_t size, uint8_t attr);
+
+/*
+ * Iterate over root directory entries, calling cb for each valid file.
+ * cb: Callback function receiving filename (8.3 format), size, and attributes.
+ * Returns 0 on success, -1 on error.
+ */
+int fat_list_root(fat_dir_callback_t cb);
+
 #endif

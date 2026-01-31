@@ -341,3 +341,71 @@ uint32_t fat_get_size(int fd) {
 
     return open_files[fd].file_size;
 }
+
+int fat_list_root(fat_dir_callback_t cb) {
+    if (!fat_mounted || cb == NULL) {
+        return -1;
+    }
+
+    /* Traverse root directory cluster chain */
+    uint32_t cluster = root_cluster;
+
+    while (cluster < FAT32_EOC_MIN) {
+        uint32_t sector = cluster_to_sector(cluster);
+
+        /* Read each sector in this cluster */
+        for (uint32_t s = 0; s < sectors_per_cluster; s++) {
+            if (block_read(sector + s, 1, sector_buf) != 0) {
+                return -1;
+            }
+
+            /* Scan directory entries in this sector */
+            fat32_dirent_t *dirent = (fat32_dirent_t *)sector_buf;
+            for (int i = 0; i < 16; i++) {  /* 16 entries per 512-byte sector */
+                /* Check for end of directory */
+                if (dirent[i].name[0] == 0x00) {
+                    return 0;  /* Done */
+                }
+
+                /* Skip deleted entries */
+                if (dirent[i].name[0] == 0xE5) {
+                    continue;
+                }
+
+                /* Skip LFN entries and volume labels */
+                if (dirent[i].attr == FAT_ATTR_LFN) {
+                    continue;
+                }
+                if (dirent[i].attr & FAT_ATTR_VOLUME_ID) {
+                    continue;
+                }
+
+                /* Build null-terminated filename string */
+                char name[13];  /* 8 + 1 + 3 + 1 = 13 */
+                int pos = 0;
+
+                /* Copy name part (up to 8 chars, strip trailing spaces) */
+                for (int j = 0; j < 8 && dirent[i].name[j] != ' '; j++) {
+                    name[pos++] = dirent[i].name[j];
+                }
+
+                /* Add dot and extension if present */
+                if (dirent[i].name[8] != ' ') {
+                    name[pos++] = '.';
+                    for (int j = 8; j < 11 && dirent[i].name[j] != ' '; j++) {
+                        name[pos++] = dirent[i].name[j];
+                    }
+                }
+                name[pos] = '\0';
+
+                /* Invoke callback */
+                cb(name, dirent[i].file_size, dirent[i].attr);
+            }
+        }
+
+        /* Follow cluster chain */
+        cluster = fat_get_entry(cluster);
+    }
+
+    return 0;
+}

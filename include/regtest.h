@@ -41,12 +41,15 @@
 #define REGTEST_FS      1
 #define REGTEST_FB      1
 #define REGTEST_CONSOLE 1
+#define REGTEST_KBD     1
+#define REGTEST_SHELL   1
 #endif
 
 /* Default: run all tests if no specific suite is selected */
 #if !defined(REGTEST_PMM) && !defined(REGTEST_HEAP) && !defined(REGTEST_TASK) && \
     !defined(REGTEST_USER) && !defined(REGTEST_ELF) && !defined(REGTEST_FS) && \
-    !defined(REGTEST_FB) && !defined(REGTEST_CONSOLE)
+    !defined(REGTEST_FB) && !defined(REGTEST_CONSOLE) && !defined(REGTEST_KBD) && \
+    !defined(REGTEST_SHELL)
 #define REGTEST_PMM     1
 #define REGTEST_HEAP    1
 #define REGTEST_TASK    1
@@ -55,6 +58,8 @@
 #define REGTEST_FS      1
 #define REGTEST_FB      1
 #define REGTEST_CONSOLE 1
+#define REGTEST_KBD     1
+#define REGTEST_SHELL   1
 #endif
 
 /*
@@ -107,5 +112,7 @@ int regtest_elf(void);
 int regtest_fs(void);
 int regtest_fb(void);
 int regtest_console(void);
+int regtest_kbd(void);
+int regtest_shell(void);
 
 #endif /* REGTEST_H */

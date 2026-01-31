@@ -260,3 +260,95 @@ size_t kbd_readline(char *dst, size_t max) {
     dst[pos] = '\0';
     return pos;
 }
+
+#ifdef REGTEST_BUILD
+/*
+ * Character to Scancode Set 1 mapping for test injection.
+ * Index is ASCII character, value is make scancode.
+ */
+static const uint8_t char_to_scancode[128] = {
+    /* 0x00-0x0F: Control characters */
+    ['\b'] = 0x0E,  /* Backspace */
+    ['\t'] = 0x0F,  /* Tab */
+    ['\n'] = 0x1C,  /* Enter */
+
+    /* 0x20-0x2F: Space and punctuation */
+    [' ']  = 0x39,
+    ['!']  = 0x02,  /* Shift+1 - just use 1 for simplicity */
+    ['\''] = 0x28,
+    [',']  = 0x33,
+    ['-']  = 0x0C,
+    ['.']  = 0x34,
+    ['/']  = 0x35,
+
+    /* 0x30-0x39: Digits */
+    ['0']  = 0x0B,
+    ['1']  = 0x02,
+    ['2']  = 0x03,
+    ['3']  = 0x04,
+    ['4']  = 0x05,
+    ['5']  = 0x06,
+    ['6']  = 0x07,
+    ['7']  = 0x08,
+    ['8']  = 0x09,
+    ['9']  = 0x0A,
+
+    /* 0x3A-0x40: More punctuation */
+    [';']  = 0x27,
+    ['=']  = 0x0D,
+    ['[']  = 0x1A,
+    ['\\'] = 0x2B,
+    [']']  = 0x1B,
+    ['`']  = 0x29,
+
+    /* 0x41-0x5A: Uppercase letters (same scancode as lowercase) */
+    ['A']  = 0x1E, ['B']  = 0x30, ['C']  = 0x2E, ['D']  = 0x20,
+    ['E']  = 0x12, ['F']  = 0x21, ['G']  = 0x22, ['H']  = 0x23,
+    ['I']  = 0x17, ['J']  = 0x24, ['K']  = 0x25, ['L']  = 0x26,
+    ['M']  = 0x32, ['N']  = 0x31, ['O']  = 0x18, ['P']  = 0x19,
+    ['Q']  = 0x10, ['R']  = 0x13, ['S']  = 0x1F, ['T']  = 0x14,
+    ['U']  = 0x16, ['V']  = 0x2F, ['W']  = 0x11, ['X']  = 0x2D,
+    ['Y']  = 0x15, ['Z']  = 0x2C,
+
+    /* 0x61-0x7A: Lowercase letters */
+    ['a']  = 0x1E, ['b']  = 0x30, ['c']  = 0x2E, ['d']  = 0x20,
+    ['e']  = 0x12, ['f']  = 0x21, ['g']  = 0x22, ['h']  = 0x23,
+    ['i']  = 0x17, ['j']  = 0x24, ['k']  = 0x25, ['l']  = 0x26,
+    ['m']  = 0x32, ['n']  = 0x31, ['o']  = 0x18, ['p']  = 0x19,
+    ['q']  = 0x10, ['r']  = 0x13, ['s']  = 0x1F, ['t']  = 0x14,
+    ['u']  = 0x16, ['v']  = 0x2F, ['w']  = 0x11, ['x']  = 0x2D,
+    ['y']  = 0x15, ['z']  = 0x2C,
+};
+
+void kbd_inject_string(const char *s) {
+    while (*s) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 128) {
+            uint8_t scancode = char_to_scancode[c];
+            if (scancode != 0) {
+                /* Simulate key press (no release needed for buffer injection) */
+                kbd_process_scancode(scancode, 1);
+            }
+        }
+        s++;
+    }
+}
+
+void kbd_reset_state(void) {
+    /* Disable interrupts for atomic state reset */
+    asm volatile("cli");
+
+    /* Reset modifier state */
+    shift_left = 0;
+    shift_right = 0;
+    caps_lock = 0;
+    ctrl_held = 0;
+    extended_scancode = 0;
+
+    /* Clear ring buffer */
+    kbd_head = 0;
+    kbd_tail = 0;
+
+    asm volatile("sti");
+}
+#endif /* REGTEST_BUILD */

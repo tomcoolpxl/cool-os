@@ -16,6 +16,8 @@
 #include "console.h"
 #include "serial.h"
 #include "limine.h"
+#include "kbd.h"
+#include "shell.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -706,5 +708,547 @@ int regtest_console(void) {
     regtest_pass("console_present");
 
     regtest_end_suite("console");
+    return 0;
+}
+
+/* ========== Keyboard Suite ========== */
+
+int regtest_kbd(void) {
+    regtest_start_suite("kbd");
+
+    /* Reset keyboard state before tests */
+    kbd_reset_state();
+
+    /* Test 1: Buffer is empty after reset */
+    int c = kbd_getc_nonblock();
+    if (c != -1) {
+        regtest_fail("kbd_reset_empty", "buffer not empty after reset");
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_reset_empty");
+
+    /* Test 2: Inject single character */
+    kbd_inject_string("a");
+    c = kbd_getc_nonblock();
+    if (c != 'a') {
+        regtest_fail("kbd_inject_single", "expected 'a'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_inject_single");
+
+    /* Test 3: Buffer should be empty after consuming */
+    c = kbd_getc_nonblock();
+    if (c != -1) {
+        regtest_fail("kbd_consume_empty", "buffer should be empty");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_consume_empty");
+
+    /* Test 4: Inject multiple characters */
+    kbd_reset_state();
+    kbd_inject_string("hello");
+
+    char buf[16];
+    int i;
+    for (i = 0; i < 5; i++) {
+        c = kbd_getc_nonblock();
+        if (c == -1) {
+            regtest_fail("kbd_inject_multi", "premature end of buffer");
+            kbd_reset_state();
+            regtest_end_suite("kbd");
+            return -1;
+        }
+        buf[i] = (char)c;
+    }
+    buf[5] = '\0';
+
+    /* Compare strings manually */
+    const char *expected = "hello";
+    int match = 1;
+    for (i = 0; i < 5; i++) {
+        if (buf[i] != expected[i]) {
+            match = 0;
+            break;
+        }
+    }
+    if (!match) {
+        regtest_fail("kbd_inject_multi", "string mismatch");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_inject_multi");
+
+    /* Test 5: Inject with newline */
+    kbd_reset_state();
+    kbd_inject_string("test\n");
+
+    for (i = 0; i < 4; i++) {
+        c = kbd_getc_nonblock();
+        if (c == -1) {
+            regtest_fail("kbd_inject_newline", "premature end");
+            kbd_reset_state();
+            regtest_end_suite("kbd");
+            return -1;
+        }
+        buf[i] = (char)c;
+    }
+    c = kbd_getc_nonblock();
+    if (c != '\n') {
+        regtest_fail("kbd_inject_newline", "expected newline");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_inject_newline");
+
+    /* Test 6: Inject digits and special chars */
+    kbd_reset_state();
+    kbd_inject_string("123 ");
+
+    c = kbd_getc_nonblock();
+    if (c != '1') {
+        regtest_fail("kbd_inject_digits", "expected '1'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != '2') {
+        regtest_fail("kbd_inject_digits", "expected '2'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != '3') {
+        regtest_fail("kbd_inject_digits", "expected '3'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != ' ') {
+        regtest_fail("kbd_inject_digits", "expected space");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_inject_digits");
+
+    /* Test 7: Inject backspace character */
+    kbd_reset_state();
+    kbd_inject_string("ab\bc\n");  /* Type "ab", backspace, "c", enter -> "ac" */
+
+    c = kbd_getc_nonblock();
+    if (c != 'a') {
+        regtest_fail("kbd_inject_backspace", "expected 'a'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != 'b') {
+        regtest_fail("kbd_inject_backspace", "expected 'b'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != '\b') {
+        regtest_fail("kbd_inject_backspace", "expected backspace");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != 'c') {
+        regtest_fail("kbd_inject_backspace", "expected 'c'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    c = kbd_getc_nonblock();
+    if (c != '\n') {
+        regtest_fail("kbd_inject_backspace", "expected newline");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_inject_backspace");
+
+    /* Test 8: Readline with simple input */
+    kbd_reset_state();
+    kbd_inject_string("test\n");
+
+    char line[32];
+    size_t len = kbd_readline(line, sizeof(line));
+
+    if (len != 4) {
+        regtest_fail("kbd_readline_simple", "expected len=4");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    /* Verify "test" */
+    if (line[0] != 't' || line[1] != 'e' || line[2] != 's' || line[3] != 't' || line[4] != '\0') {
+        regtest_fail("kbd_readline_simple", "content mismatch");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_readline_simple");
+
+    /* Test 9: Readline with backspace editing */
+    kbd_reset_state();
+    kbd_inject_string("ab\bc\n");  /* Type "ab", backspace, "c" -> "ac" */
+
+    len = kbd_readline(line, sizeof(line));
+
+    if (len != 2) {
+        regtest_fail("kbd_readline_backspace", "expected len=2");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    if (line[0] != 'a' || line[1] != 'c' || line[2] != '\0') {
+        regtest_fail("kbd_readline_backspace", "expected 'ac'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_readline_backspace");
+
+    /* Test 10: Readline backspace at start (should not crash) */
+    kbd_reset_state();
+    kbd_inject_string("\b\b\bhi\n");  /* Backspace at empty, then "hi" */
+
+    len = kbd_readline(line, sizeof(line));
+
+    if (len != 2) {
+        regtest_fail("kbd_readline_backspace_empty", "expected len=2");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    if (line[0] != 'h' || line[1] != 'i') {
+        regtest_fail("kbd_readline_backspace_empty", "expected 'hi'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_readline_backspace_empty");
+
+    /* Test 11: Readline with multiple backspaces */
+    kbd_reset_state();
+    kbd_inject_string("hello\b\b\b\b\bworld\n");  /* Delete "hello", type "world" */
+
+    len = kbd_readline(line, sizeof(line));
+
+    if (len != 5) {
+        regtest_fail("kbd_readline_multi_backspace", "expected len=5");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    if (line[0] != 'w' || line[1] != 'o' || line[2] != 'r' ||
+        line[3] != 'l' || line[4] != 'd') {
+        regtest_fail("kbd_readline_multi_backspace", "expected 'world'");
+        kbd_reset_state();
+        regtest_end_suite("kbd");
+        return -1;
+    }
+    regtest_pass("kbd_readline_multi_backspace");
+
+    kbd_reset_state();
+    regtest_end_suite("kbd");
+    return 0;
+}
+
+/* ========== Shell Suite ========== */
+
+/*
+ * Shell Test Suite
+ *
+ * Tests command parsing and execution via shell_exec() which bypasses
+ * keyboard input. This tests the command dispatch logic directly.
+ *
+ * What IS tested:
+ * - Command line parsing (empty, single word, multiple args, whitespace)
+ * - Command dispatch (help, clear, ls, cat, run)
+ * - Error handling (unknown command, missing args, file errors)
+ *
+ * What is NOT tested (would require interactive shell):
+ * - Full shell_main() loop (blocks on kbd_getc_blocking)
+ * - Prompt display
+ * - Command output content verification (requires console capture)
+ *
+ * Readline/keyboard integration is tested in the kbd suite above.
+ */
+
+int regtest_shell(void) {
+    regtest_start_suite("shell");
+
+    /* Test 1: Parse empty line */
+    {
+        char buf[SHELL_MAX_LINE];
+        char *argv[SHELL_MAX_ARGS];
+        int argc;
+
+        int result = shell_parse_line("", &argc, argv, buf, SHELL_MAX_LINE);
+        if (result != 0 || argc != 0) {
+            regtest_fail("shell_parse_empty", "expected argc=0");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_parse_empty");
+    }
+
+    /* Test 2: Parse single word */
+    {
+        char buf[SHELL_MAX_LINE];
+        char *argv[SHELL_MAX_ARGS];
+        int argc;
+
+        shell_parse_line("help", &argc, argv, buf, SHELL_MAX_LINE);
+        if (argc != 1) {
+            regtest_fail("shell_parse_single", "expected argc=1");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        /* Compare argv[0] to "help" */
+        const char *exp = "help";
+        int match = 1;
+        for (int i = 0; exp[i]; i++) {
+            if (argv[0][i] != exp[i]) {
+                match = 0;
+                break;
+            }
+        }
+        if (!match || argv[0][4] != '\0') {
+            regtest_fail("shell_parse_single", "argv[0] != help");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_parse_single");
+    }
+
+    /* Test 3: Parse multiple args */
+    {
+        char buf[SHELL_MAX_LINE];
+        char *argv[SHELL_MAX_ARGS];
+        int argc;
+
+        shell_parse_line("cat file.txt", &argc, argv, buf, SHELL_MAX_LINE);
+        if (argc != 2) {
+            regtest_fail("shell_parse_multi", "expected argc=2");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_parse_multi");
+    }
+
+    /* Test 4: Parse with leading/trailing spaces */
+    {
+        char buf[SHELL_MAX_LINE];
+        char *argv[SHELL_MAX_ARGS];
+        int argc;
+
+        shell_parse_line("  ls  ", &argc, argv, buf, SHELL_MAX_LINE);
+        if (argc != 1) {
+            regtest_fail("shell_parse_spaces", "expected argc=1");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_parse_spaces");
+    }
+
+    /* Test 5: Execute help command */
+    {
+        int result = shell_exec("help");
+        if (result != SHELL_OK) {
+            regtest_fail("shell_cmd_help", "help command failed");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_help");
+    }
+
+    /* Test 6: Execute clear command */
+    {
+        int result = shell_exec("clear");
+        if (result != SHELL_OK) {
+            regtest_fail("shell_cmd_clear", "clear command failed");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_clear");
+    }
+
+    /* Test 7: Unknown command returns error */
+    {
+        int result = shell_exec("notacommand");
+        if (result != SHELL_ERR_UNKNOWN) {
+            regtest_fail("shell_cmd_unknown", "expected SHELL_ERR_UNKNOWN");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_unknown");
+    }
+
+    /* Test 8: Empty command returns error */
+    {
+        int result = shell_exec("");
+        if (result != SHELL_ERR_EMPTY) {
+            regtest_fail("shell_cmd_empty", "expected SHELL_ERR_EMPTY");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_empty");
+    }
+
+    /* Test 9: Command with insufficient args */
+    {
+        int result = shell_exec("cat");  /* cat requires filename */
+        if (result != SHELL_ERR_ARGS) {
+            regtest_fail("shell_cmd_args", "expected SHELL_ERR_ARGS");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_args");
+    }
+
+    /* Test 10: ls command (filesystem may or may not be available) */
+    {
+        int result = shell_exec("ls");
+        /* ls should return SHELL_OK or SHELL_ERR_FILE */
+        if (result != SHELL_OK && result != SHELL_ERR_FILE) {
+            regtest_fail("shell_cmd_ls", "unexpected return code");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_cmd_ls");
+    }
+
+    /* Test 11: Multiple commands in sequence (simulates user session) */
+    {
+        int r1 = shell_exec("help");
+        int r2 = shell_exec("clear");
+        int r3 = shell_exec("help");
+
+        if (r1 != SHELL_OK || r2 != SHELL_OK || r3 != SHELL_OK) {
+            regtest_fail("shell_multi_cmd", "sequential commands failed");
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_multi_cmd");
+    }
+
+    /* Test 12: Full integration - kbd_inject + kbd_readline + shell_exec */
+    {
+        char line[SHELL_MAX_LINE];
+
+        /* Simulate typing "help" and pressing Enter */
+        kbd_reset_state();
+        kbd_inject_string("help\n");
+
+        size_t len = kbd_readline(line, SHELL_MAX_LINE);
+        if (len != 4) {
+            regtest_fail("shell_integration_readline", "expected len=4");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+
+        /* Execute the command we "typed" */
+        int result = shell_exec(line);
+        if (result != SHELL_OK) {
+            regtest_fail("shell_integration_exec", "help command failed");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_integration");
+    }
+
+    /* Test 13: Integration with multiple commands */
+    {
+        char line[SHELL_MAX_LINE];
+
+        /* First command: help */
+        kbd_reset_state();
+        kbd_inject_string("help\n");
+        size_t len1 = kbd_readline(line, SHELL_MAX_LINE);
+        int r1 = shell_exec(line);
+
+        /* Second command: clear */
+        kbd_reset_state();
+        kbd_inject_string("clear\n");
+        size_t len2 = kbd_readline(line, SHELL_MAX_LINE);
+        int r2 = shell_exec(line);
+
+        /* Third command: unknown (should fail) */
+        kbd_reset_state();
+        kbd_inject_string("badcmd\n");
+        size_t len3 = kbd_readline(line, SHELL_MAX_LINE);
+        int r3 = shell_exec(line);
+
+        if (len1 != 4 || len2 != 5 || len3 != 6) {
+            regtest_fail("shell_multi_integration_len", "readline lengths wrong");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+
+        if (r1 != SHELL_OK || r2 != SHELL_OK || r3 != SHELL_ERR_UNKNOWN) {
+            regtest_fail("shell_multi_integration_exec", "command results wrong");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_multi_integration");
+    }
+
+    /* Test 14: Readline with backspace then execute */
+    {
+        char line[SHELL_MAX_LINE];
+
+        /* Type "hepp" then backspace twice and type "lp" -> "help" */
+        kbd_reset_state();
+        kbd_inject_string("hepp\b\blp\n");
+
+        size_t len = kbd_readline(line, SHELL_MAX_LINE);
+        if (len != 4) {
+            regtest_fail("shell_backspace_integration_len", "expected len=4");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+
+        /* Verify content is "help" */
+        if (line[0] != 'h' || line[1] != 'e' || line[2] != 'l' || line[3] != 'p') {
+            regtest_fail("shell_backspace_integration_content", "expected 'help'");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+
+        int result = shell_exec(line);
+        if (result != SHELL_OK) {
+            regtest_fail("shell_backspace_integration_exec", "help command failed");
+            kbd_reset_state();
+            regtest_end_suite("shell");
+            return -1;
+        }
+        regtest_pass("shell_backspace_integration");
+    }
+
+    kbd_reset_state();
+    regtest_end_suite("shell");
     return 0;
 }

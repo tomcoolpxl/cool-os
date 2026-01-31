@@ -24,6 +24,7 @@
 #include "kbd.h"
 #include "pci.h"
 #include "lapic.h"
+#include "shell.h"
 
 #ifdef REGTEST_BUILD
 #include "regtest.h"
@@ -176,7 +177,7 @@ static void print_kernel_info(void) {
 
     puts_both("I am coolOS.\n\n");
     puts_both("========================================\n");
-    puts_both("  cool-os v0.12 (Proto 12)\n");
+    puts_both("  cool-os v0.13 (Proto 13)\n");
     puts_both("  x86-64 Teaching Kernel\n");
     puts_both("========================================\n");
 
@@ -363,8 +364,12 @@ void kmain(void) {
     /* Never reached - QEMU exits via isa-debug-exit */
 #endif
 
-    serial_puts("cool-os: entering idle loop\n");
+    /* Initialize and start the kernel shell */
+    shell_init();
+
+    /* Enter scheduler loop - kmain becomes idle when no work to do */
+    serial_puts("cool-os: entering scheduler\n");
     for (;;) {
-        asm volatile("hlt");
+        scheduler_yield();
     }
 }

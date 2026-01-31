@@ -16,7 +16,8 @@
       "Bash(xargs basename:*)",
       "Bash(chmod:*)",
       "Bash(./scripts/run_regtest.sh:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(pkill:*)"
     ]
   }
 }

@@ -10,7 +10,7 @@ The kernel is written primarily in C, with some assembly for low-level tasks lik
 
 **Planned Work:** prototype planning in `./TODO/prototype*.md`. Order according to prototype veersion number.
 
-**Current Status:** Proto 12 (Keyboard Input) Complete. Using PS/2 driver (with USB legacy emulation). Native XHCI disabled. See `DONE/usb_debug_plan.md` for details.
+**Current Status:** Proto 13 (Kernel Shell) Complete. Interactive shell with keyboard input via PS/2 (USB legacy emulation). Shell includes test API for automated regression testing.
 
 ## Target Architecture
 
@@ -175,6 +175,34 @@ Build flavor differences:
   - PCI enumeration and BAR mapping (Code present but disabled)
   - BIOS-to-OS Handoff logic (Implemented in `xhci.c`)
 - **Fallback Strategy:** System relies on BIOS Legacy Emulation (PS/2) for broad compatibility.
+- **Readline Features:**
+  - Enter: submit line
+  - Backspace: delete character before cursor
+  - Printable ASCII (32-126): insert at cursor
+- **Readline Limitations (NOT implemented):**
+  - Cursor movement (left/right arrow keys)
+  - Delete key (delete character at cursor)
+  - Home/End keys
+  - Command history (up/down arrows)
+  - Tab completion
+- **Test API (REGTEST_BUILD only):**
+  - `kbd_inject_string(s)`: Inject string into keyboard buffer
+  - `kbd_reset_state()`: Reset modifier state and clear buffer
+
+### Proto 13: Kernel Shell
+- Interactive command-line shell running as kernel task
+- Command parsing with whitespace handling
+- Built-in commands:
+  - `help`: List available commands
+  - `clear`: Clear screen
+  - `ls`: List files in root directory (FAT32)
+  - `cat <file>`: Display file contents
+  - `run <program.elf>`: Execute ELF program
+- Shell API: `shell_init()`, `shell_main()`
+- **Test API (REGTEST_BUILD only):**
+  - `shell_exec(cmdline)`: Execute command directly (bypasses keyboard)
+  - `shell_parse_line()`: Parse command line into argc/argv
+- Return codes: `SHELL_OK`, `SHELL_ERR_EMPTY`, `SHELL_ERR_UNKNOWN`, `SHELL_ERR_ARGS`, `SHELL_ERR_FILE`
 
 ## User Programs
 
@@ -212,6 +240,7 @@ include/
   regtest.h     - Regression test infrastructure API
   scheduler.h   - Scheduler API (init/add/yield)
   serial.h      - Serial port I/O
+  shell.h       - Kernel shell API and return codes
   syscall.h     - Syscall numbers and dispatcher
   task.h        - Task API (create/create_user/create_elf/create_from_path/yield/current)
   timer.h       - Timer subsystem API (sleep/delay functions)
@@ -239,6 +268,7 @@ src/
   regtest.c     - Regression test infrastructure implementation
   scheduler.c   - Round-robin scheduler implementation
   serial.c      - Serial port driver
+  shell.c       - Kernel shell implementation
   syscall.c     - Syscall initialization and dispatch
   syscall_entry.S - Assembly SYSCALL/SYSRET entry point
   task.c        - Task creation and user/ELF/disk mode support
@@ -311,6 +341,8 @@ echo $?             # 0 = pass, 1 = fail
 | `fs` | Filesystem: VFS open/read/seek/close, disk ELF loading |
 | `fb` | Framebuffer: init, dimensions, clear, fill, present |
 | `console` | Text Console: init, putc, puts, scroll |
+| `kbd` | Keyboard: injection, readline, backspace editing |
+| `shell` | Shell: command parsing, dispatch, error handling |
 
 ### Exit Codes
 

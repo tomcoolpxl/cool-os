@@ -38,4 +38,12 @@ char kbd_getc_blocking(void);
 /* Read a line with echo and editing (returns length excluding null) */
 size_t kbd_readline(char *dst, size_t max);
 
+#ifdef REGTEST_BUILD
+/* Inject a string into keyboard buffer (for testing) */
+void kbd_inject_string(const char *s);
+
+/* Reset keyboard state and clear buffer (for testing) */
+void kbd_reset_state(void);
+#endif
+
 #endif
